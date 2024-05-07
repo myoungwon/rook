@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"emperror.dev/errors"
 	"github.com/coreos/pkg/capnslog"
@@ -63,6 +64,7 @@ type ReconcileNvmeOfStorage struct {
 	context          *clusterd.Context
 	opManagerContext context.Context
 	recorder         record.EventRecorder
+	nvmeOfStorage    *cephv1.NvmeOfStorage
 }
 
 // Add creates a new NvmeOfStorage Controller and adds it to the Manager. The Manager will set fields on the Controller
@@ -79,6 +81,7 @@ func newReconciler(mgr manager.Manager, context *clusterd.Context, opManagerCont
 		scheme:           mgr.GetScheme(),
 		opManagerContext: opManagerContext,
 		recorder:         mgr.GetEventRecorderFor("rook-" + controllerName),
+		nvmeOfStorage:    &cephv1.NvmeOfStorage{},
 	}
 }
 
@@ -105,5 +108,16 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reconcile.Request) (reconcile.Result, error) {
 	logger.Debugf("reconciling NvmeOfStorage. Request.Namespace: %s, Request.Name: %s", request.Namespace, request.Name)
 
-	return reporting.ReportReconcileResult(logger, r.recorder, request, nil, reconcile.Result{}, nil)
+	if strings.Contains(request.Name, "nvmeofstorage") {
+		// Fetch the NvmeOfStorage CRD object
+		err := r.client.Get(r.opManagerContext, request.NamespacedName, r.nvmeOfStorage)
+		if err != nil {
+			logger.Errorf("unable to fetch NvmeOfStorage, err: %v", err)
+			return reconcile.Result{}, err
+		}
+
+		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
+	}
+
+	return reconcile.Result{}, nil
 }
