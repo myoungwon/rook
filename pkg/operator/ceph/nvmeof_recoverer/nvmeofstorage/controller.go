@@ -31,6 +31,7 @@ import (
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
 	"github.com/rook/rook/pkg/operator/ceph/cluster/osd"
 	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
+	cm "github.com/rook/rook/pkg/operator/ceph/nvmeof_recoverer/clustermanager"
 	"github.com/rook/rook/pkg/operator/ceph/reporting"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -66,6 +67,7 @@ type ReconcileNvmeOfStorage struct {
 	context          *clusterd.Context
 	opManagerContext context.Context
 	recorder         record.EventRecorder
+	clustermanager   *cm.ClusterManager
 	nvmeOfStorage    *cephv1.NvmeOfStorage
 }
 
@@ -84,6 +86,7 @@ func newReconciler(mgr manager.Manager, context *clusterd.Context, opManagerCont
 		opManagerContext: opManagerContext,
 		recorder:         mgr.GetEventRecorderFor("rook-" + controllerName),
 		nvmeOfStorage:    &cephv1.NvmeOfStorage{},
+		clustermanager:   cm.New(),
 	}
 }
 
@@ -154,6 +157,12 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 			}
 			logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
 				osdID, device.AttachedNode, fabricHost)
+
+			// Update the AttachableHosts
+			err = r.clustermanager.AddAttachbleHost(device.AttachedNode)
+			if err != nil {
+				panic(err)
+			}
 		}
 
 		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
