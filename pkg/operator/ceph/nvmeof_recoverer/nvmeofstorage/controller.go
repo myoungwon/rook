@@ -197,6 +197,13 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 			if err != nil {
 				panic(err)
 			}
+
+			// Update the NvmeOfStorage CR to reflect the OSD ID
+			device.OsdID = osdID
+			err = r.client.Update(context, r.nvmeOfStorage)
+			if err != nil {
+				panic(fmt.Sprintf("Failed to update NVMeOfStorage: %v, Namespace: %s, Name: %s", err, request.Namespace, request.Name))
+			}
 		}
 
 		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
