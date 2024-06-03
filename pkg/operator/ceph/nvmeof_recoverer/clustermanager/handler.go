@@ -26,3 +26,15 @@ func (cm *ClusterManager) AddAttachbleHost(hostname string) error {
 
 	return nil
 }
+
+func (cm *ClusterManager) GetNextAttachableHost(currentHost string) string {
+	if len(cm.AttachableHosts) == 0 {
+		return ""
+	}
+	for i, host := range cm.AttachableHosts {
+		if host == currentHost {
+			return cm.AttachableHosts[(i+1)%len(cm.AttachableHosts)]
+		}
+	}
+	return ""
+}

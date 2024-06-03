@@ -162,12 +162,10 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 			device := &r.nvmeOfStorage.Spec.Devices[i]
 			// Get OSD pods with label "app=rook-ceph-osd"
 			var osdID, clusterName string
-			pods, err := r.context.Clientset.CoreV1().Pods(request.Namespace).List(context, metav1.ListOptions{
+			opts := metav1.ListOptions{
 				LabelSelector: "app=" + osd.AppName,
-			})
-			if err != nil {
-				panic(err)
 			}
+			pods := r.getPods(context, request.Namespace, opts)
 			// Find the osd id and cluster name for the fabric device listed in the nvmeofstorage CR
 			for _, pod := range pods.Items {
 				for _, envVar := range pod.Spec.Containers[0].Env {
@@ -202,9 +200,36 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 		}
 
 		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
+		// TODO (cheolho.kang): Refactor this method to use a more reliable way of identifying the events,
+		// such as checking labels or annotations, instead of string parsing.
+	} else if strings.Contains(request.Name, "rook-ceph-osd") {
+		// Get the attached hostname for the OSD
+		opts := metav1.ListOptions{
+			FieldSelector: "metadata.name=" + request.Name,
+		}
+		pods := r.getPods(context, request.Namespace, opts)
+		attachedNode := pods.Items[0].Spec.NodeName
+
+		// Get the next attachable hostname for the OSD
+		nextHostName := r.clustermanager.GetNextAttachableHost(attachedNode)
+		if nextHostName == "" {
+			panic("no attachable hosts found")
+		}
+		logger.Debugf("Pod %q is going be transferred from %s to %s", request.Name, attachedNode, nextHostName)
+
+		// TODO: Add create and run job for nvme-of device switch to the next host
+		// Placeholder for the job creation and execution
 	}
 
 	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileNvmeOfStorage) getPods(context context.Context, namespace string, opts metav1.ListOptions) *corev1.PodList {
+	pods, err := r.context.Clientset.CoreV1().Pods(namespace).List(context, opts)
+	if err != nil || len(pods.Items) == 0 {
+		panic(err)
+	}
+	return pods
 }
 
 func isOSDPod(labels map[string]string) bool {
