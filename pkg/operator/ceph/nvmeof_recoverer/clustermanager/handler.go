@@ -139,6 +139,10 @@ func (cm *ClusterManager) ConnectOSDDeviceToHost(targetHost string, fabricDevice
 	return output, err
 }
 
+func (cm *ClusterManager) DisconnectOSDDevice(fabricDeviceInfo cephv1.FabricDevice) (string, error) {
+	return cm.runNvmeoFJob("disconnect", fabricDeviceInfo.AttachedNode, "", "", fabricDeviceInfo.SubNQN)
+}
+
 func (cm *ClusterManager) runNvmeoFJob(mode string, targetHost, address, port, subnqn string) (string, error) {
 	privileged := true
 	job := &batch.Job{

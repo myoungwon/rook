@@ -33,6 +33,7 @@ import (
 	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
 	cm "github.com/rook/rook/pkg/operator/ceph/nvmeof_recoverer/clustermanager"
 	"github.com/rook/rook/pkg/operator/ceph/reporting"
+	"github.com/rook/rook/pkg/operator/k8sutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -217,6 +218,9 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 		osdID := strings.Split(strings.Split(request.Name, osd.AppName+"-")[1], "-")[0]
 		deviceInfo := r.findTargetNvmeOfStorageCR(osdID)
 
+		// Cleanup the OSD that is in CrashLoopBackOff
+		r.cleanupOSD(request.Namespace, deviceInfo)
+
 		// Connect the device to the new attachable host
 		output := r.reassignFaultedOSDDevice(deviceInfo)
 		deviceInfo.AttachedNode = output.AttachedNode
@@ -244,6 +248,27 @@ func (r *ReconcileNvmeOfStorage) getPods(context context.Context, namespace stri
 		panic(err)
 	}
 	return pods
+}
+
+func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.FabricDevice) {
+	// Delete the OSD deployment that is in CrashLoopBackOff
+	err := k8sutil.DeleteDeployment(
+		r.opManagerContext,
+		r.context.Clientset,
+		namespace,
+		osd.AppName+"-"+deviceInfo.OsdID,
+	)
+	if err != nil {
+		panic(fmt.Sprintf("failed to delete OSD deployment %q in namespace %q: %v",
+			osd.AppName+"-"+deviceInfo.OsdID, namespace, err))
+	}
+
+	// Disconnect the device used by this OSD
+	_, err = r.clustermanager.DisconnectOSDDevice(deviceInfo)
+	if err != nil {
+		panic(fmt.Sprintf("failed to disconnect OSD device with SubNQN %s: %v", deviceInfo.SubNQN, err))
+	}
+	logger.Debugf("successfully deleted the OSD deployment. Name: %q", osd.AppName+"-"+deviceInfo.OsdID)
 }
 
 func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
