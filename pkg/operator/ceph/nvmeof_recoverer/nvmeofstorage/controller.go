@@ -28,6 +28,7 @@ import (
 
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
+	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
 	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
 	"github.com/rook/rook/pkg/operator/ceph/reporting"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -114,6 +115,48 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 		if err != nil {
 			logger.Errorf("unable to fetch NvmeOfStorage, err: %v", err)
 			return reconcile.Result{}, err
+		}
+
+		// Retrieve the nvmeofstorage CR to update the CRUSH map
+		for i := range r.nvmeOfStorage.Spec.Devices {
+			device := &r.nvmeOfStorage.Spec.Devices[i]
+			// Get OSD pods with label "app=rook-ceph-osd"
+			var osdID, clusterName string
+			pods, err := r.context.Clientset.CoreV1().Pods(request.Namespace).List(context, metav1.ListOptions{
+				LabelSelector: "app=rook-ceph-osd",
+			})
+			if err != nil {
+				panic(err)
+			}
+			// Find the osd id and cluster name for the fabric device listed in the nvmeofstorage CR
+			for _, pod := range pods.Items {
+				if pod.Spec.NodeName == device.AttachedNode {
+					for _, container := range pod.Spec.Containers {
+						for _, env := range container.Env {
+							if env.Name == "ROOK_BLOCK_PATH" && env.Value == device.DeviceName {
+								osdID = pod.Labels["ceph-osd-id"]
+								clusterName = pod.Labels["rook_cluster"]
+								break
+							}
+						}
+					}
+				}
+			}
+
+			// Update CRUSH map for OSD relocation to fabric failure domain
+			fabricHost := "fabric-host-" + r.nvmeOfStorage.Spec.Name
+			clusterInfo := cephclient.AdminClusterInfo(context, request.Namespace, clusterName)
+			cmd := []string{"osd", "crush", "move", "osd." + osdID, "host=" + fabricHost}
+			exec := cephclient.NewCephCommand(r.context, clusterInfo, cmd)
+			exec.JsonOutput = true
+			buf, err := exec.Run()
+			if err != nil {
+				logger.Error(err, "Failed to move osd", "osdID", osdID, "srcHost", device.AttachedNode,
+					"destHost", fabricHost, "result", string(buf))
+				panic(err)
+			}
+			logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
+				osdID, device.AttachedNode, fabricHost)
 		}
 
 		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
