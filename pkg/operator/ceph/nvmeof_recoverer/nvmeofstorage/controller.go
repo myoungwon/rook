@@ -131,15 +131,11 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 			}
 			// Find the osd id and cluster name for the fabric device listed in the nvmeofstorage CR
 			for _, pod := range pods.Items {
-				if pod.Spec.NodeName == device.AttachedNode {
-					for _, container := range pod.Spec.Containers {
-						for _, env := range container.Env {
-							if env.Name == "ROOK_BLOCK_PATH" && env.Value == device.DeviceName {
-								osdID = pod.Labels["ceph-osd-id"]
-								clusterName = pod.Labels["app.kubernetes.io/part-of"]
-								break
-							}
-						}
+				for _, envVar := range pod.Spec.Containers[0].Env {
+					if envVar.Name == "ROOK_BLOCK_PATH" && envVar.Value == device.DeviceName {
+						osdID = pod.Labels["ceph-osd-id"]
+						clusterName = pod.Labels["app.kubernetes.io/part-of"]
+						break
 					}
 				}
 			}
