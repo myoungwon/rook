@@ -29,6 +29,7 @@ import (
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
+	"github.com/rook/rook/pkg/operator/ceph/cluster/osd"
 	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
 	"github.com/rook/rook/pkg/operator/ceph/reporting"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -123,7 +124,7 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 			// Get OSD pods with label "app=rook-ceph-osd"
 			var osdID, clusterName string
 			pods, err := r.context.Clientset.CoreV1().Pods(request.Namespace).List(context, metav1.ListOptions{
-				LabelSelector: "app=rook-ceph-osd",
+				LabelSelector: "app=" + osd.AppName,
 			})
 			if err != nil {
 				panic(err)
@@ -135,7 +136,7 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 						for _, env := range container.Env {
 							if env.Name == "ROOK_BLOCK_PATH" && env.Value == device.DeviceName {
 								osdID = pod.Labels["ceph-osd-id"]
-								clusterName = pod.Labels["rook_cluster"]
+								clusterName = pod.Labels["app.kubernetes.io/part-of"]
 								break
 							}
 						}
