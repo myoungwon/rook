@@ -29,15 +29,20 @@ import (
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
+	"github.com/rook/rook/pkg/operator/ceph/cluster/osd"
 	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
+	cm "github.com/rook/rook/pkg/operator/ceph/nvmeof_recoverer/clustermanager"
 	"github.com/rook/rook/pkg/operator/ceph/reporting"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
@@ -65,6 +70,7 @@ type ReconcileNvmeOfStorage struct {
 	context          *clusterd.Context
 	opManagerContext context.Context
 	recorder         record.EventRecorder
+	clustermanager   *cm.ClusterManager
 	nvmeOfStorage    *cephv1.NvmeOfStorage
 }
 
@@ -83,6 +89,7 @@ func newReconciler(mgr manager.Manager, context *clusterd.Context, opManagerCont
 		opManagerContext: opManagerContext,
 		recorder:         mgr.GetEventRecorderFor("rook-" + controllerName),
 		nvmeOfStorage:    &cephv1.NvmeOfStorage{},
+		clustermanager:   cm.New(),
 	}
 }
 
@@ -101,6 +108,39 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	err = c.Watch(cmKind, &handler.EnqueueRequestForObject{}, opcontroller.WatchControllerPredicate())
 	if err != nil {
 		return err
+	}
+
+	// Watch for changes on the OSD Pod object
+	podKind := source.Kind(
+		mgr.GetCache(),
+		&corev1.Pod{})
+	err = c.Watch(podKind, &handler.EnqueueRequestForObject{},
+		predicate.Funcs{
+			UpdateFunc: func(event event.UpdateEvent) bool {
+				oldPod, okOld := event.ObjectOld.(*corev1.Pod)
+				newPod, okNew := event.ObjectNew.(*corev1.Pod)
+				if !okOld || !okNew {
+					return false
+				}
+				if isOSDPod(newPod.Labels) && isPodDead(oldPod, newPod) {
+					namespacedName := fmt.Sprintf("%s/%s", newPod.Namespace, newPod.Name)
+					logger.Debugf("update event on Pod %q", namespacedName)
+					return true
+				}
+				return false
+			},
+			CreateFunc: func(e event.CreateEvent) bool {
+				return false
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return false
+			},
+			GenericFunc: func(e event.GenericEvent) bool {
+				return false
+			},
+		})
+	if err != nil {
+		return errors.Wrap(err, "failed to watch for changes on the Pod object")
 	}
 
 	return nil
@@ -122,23 +162,17 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 			device := &r.nvmeOfStorage.Spec.Devices[i]
 			// Get OSD pods with label "app=rook-ceph-osd"
 			var osdID, clusterName string
-			pods, err := r.context.Clientset.CoreV1().Pods(request.Namespace).List(context, metav1.ListOptions{
-				LabelSelector: "app=rook-ceph-osd",
-			})
-			if err != nil {
-				panic(err)
+			opts := metav1.ListOptions{
+				LabelSelector: "app=" + osd.AppName,
 			}
+			pods := r.getPods(context, request.Namespace, opts)
 			// Find the osd id and cluster name for the fabric device listed in the nvmeofstorage CR
 			for _, pod := range pods.Items {
-				if pod.Spec.NodeName == device.AttachedNode {
-					for _, container := range pod.Spec.Containers {
-						for _, env := range container.Env {
-							if env.Name == "ROOK_BLOCK_PATH" && env.Value == device.DeviceName {
-								osdID = pod.Labels["ceph-osd-id"]
-								clusterName = pod.Labels["rook_cluster"]
-								break
-							}
-						}
+				for _, envVar := range pod.Spec.Containers[0].Env {
+					if envVar.Name == "ROOK_BLOCK_PATH" && envVar.Value == device.DeviceName {
+						osdID = pod.Labels["ceph-osd-id"]
+						clusterName = pod.Labels["app.kubernetes.io/part-of"]
+						break
 					}
 				}
 			}
@@ -157,10 +191,63 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 			}
 			logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
 				osdID, device.AttachedNode, fabricHost)
+
+			// Update the AttachableHosts
+			err = r.clustermanager.AddAttachbleHost(device.AttachedNode)
+			if err != nil {
+				panic(err)
+			}
 		}
 
 		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
+		// TODO (cheolho.kang): Refactor this method to use a more reliable way of identifying the events,
+		// such as checking labels or annotations, instead of string parsing.
+	} else if strings.Contains(request.Name, "rook-ceph-osd") {
+		// Get the attached hostname for the OSD
+		opts := metav1.ListOptions{
+			FieldSelector: "metadata.name=" + request.Name,
+		}
+		pods := r.getPods(context, request.Namespace, opts)
+		attachedNode := pods.Items[0].Spec.NodeName
+
+		// Get the next attachable hostname for the OSD
+		nextHostName := r.clustermanager.GetNextAttachableHost(attachedNode)
+		if nextHostName == "" {
+			panic("no attachable hosts found")
+		}
+		logger.Debugf("Pod %q is going be transferred from %s to %s", request.Name, attachedNode, nextHostName)
+
+		// TODO: Add create and run job for nvme-of device switch to the next host
+		// Placeholder for the job creation and execution
 	}
 
 	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileNvmeOfStorage) getPods(context context.Context, namespace string, opts metav1.ListOptions) *corev1.PodList {
+	pods, err := r.context.Clientset.CoreV1().Pods(namespace).List(context, opts)
+	if err != nil || len(pods.Items) == 0 {
+		panic(err)
+	}
+	return pods
+}
+
+func isOSDPod(labels map[string]string) bool {
+	if labels["app"] == "rook-ceph-osd" && labels["ceph-osd-id"] != "" {
+		return true
+	}
+
+	return false
+}
+
+func isPodDead(oldPod *corev1.Pod, newPod *corev1.Pod) bool {
+	namespacedName := fmt.Sprintf("%s/%s", newPod.Namespace, newPod.Name)
+	for _, cs := range newPod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+			logger.Infof("OSD Pod %q is in CrashLoopBackOff, oldPod.Status.Phase: %s", namespacedName, oldPod.Status.Phase)
+			return true
+		}
+	}
+
+	return false
 }
