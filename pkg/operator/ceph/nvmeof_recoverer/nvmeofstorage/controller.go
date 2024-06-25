@@ -213,25 +213,31 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 		// TODO (cheolho.kang): Refactor this method to use a more reliable way of identifying the events,
 		// such as checking labels or annotations, instead of string parsing.
 	} else if strings.Contains(request.Name, "rook-ceph-osd") {
-		// Get the attached hostname for the OSD
-		opts := metav1.ListOptions{
-			FieldSelector: "metadata.name=" + request.Name,
-		}
-		pods := r.getPods(context, request.Namespace, opts)
-		attachedNode := pods.Items[0].Spec.NodeName
+		// Get the fabric device info details for the given request
+		osdID := strings.Split(strings.Split(request.Name, osd.AppName+"-")[1], "-")[0]
+		deviceInfo := r.findTargetNvmeOfStorageCR(osdID)
 
 		// Get the next attachable hostname for the OSD
-		nextHostName := r.clustermanager.GetNextAttachableHost(attachedNode)
+		nextHostName := r.clustermanager.GetNextAttachableHost(deviceInfo.AttachedNode)
 		if nextHostName == "" {
 			panic("no attachable hosts found")
 		}
-		logger.Debugf("Pod %q is going be transferred from %s to %s", request.Name, attachedNode, nextHostName)
+		logger.Debugf("Pod %q is going be transferred from %s to %s", request.Name, deviceInfo.AttachedNode, nextHostName)
 
 		// TODO: Add create and run job for nvme-of device switch to the next host
 		// Placeholder for the job creation and execution
 	}
 
 	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileNvmeOfStorage) findTargetNvmeOfStorageCR(osdID string) cephv1.FabricDevice {
+	for _, device := range r.nvmeOfStorage.Spec.Devices {
+		if device.OsdID == osdID {
+			return device
+		}
+	}
+	panic("no attached node found")
 }
 
 func (r *ReconcileNvmeOfStorage) getPods(context context.Context, namespace string, opts metav1.ListOptions) *corev1.PodList {
