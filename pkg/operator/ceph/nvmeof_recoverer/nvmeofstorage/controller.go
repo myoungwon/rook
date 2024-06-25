@@ -198,6 +198,9 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 				panic(err)
 			}
 
+			// Update device endpoint map
+			r.clustermanager.UpdateDeviceEndpointeMap(r.nvmeOfStorage)
+
 			// Update the NvmeOfStorage CR to reflect the OSD ID
 			device.OsdID = osdID
 			err = r.client.Update(context, r.nvmeOfStorage)
