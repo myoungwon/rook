@@ -89,7 +89,7 @@ func newReconciler(mgr manager.Manager, context *clusterd.Context, opManagerCont
 		opManagerContext: opManagerContext,
 		recorder:         mgr.GetEventRecorderFor("rook-" + controllerName),
 		nvmeOfStorage:    &cephv1.NvmeOfStorage{},
-		clustermanager:   cm.New(),
+		clustermanager:   cm.New(context, opManagerContext),
 	}
 }
 
@@ -217,15 +217,13 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 		osdID := strings.Split(strings.Split(request.Name, osd.AppName+"-")[1], "-")[0]
 		deviceInfo := r.findTargetNvmeOfStorageCR(osdID)
 
-		// Get the next attachable hostname for the OSD
-		nextHostName := r.clustermanager.GetNextAttachableHost(deviceInfo.AttachedNode)
-		if nextHostName == "" {
-			panic("no attachable hosts found")
-		}
-		logger.Debugf("Pod %q is going be transferred from %s to %s", request.Name, deviceInfo.AttachedNode, nextHostName)
+		// Connect the device to the new attachable host
+		output := r.reassignFaultedOSDDevice(deviceInfo)
+		deviceInfo.AttachedNode = output.AttachedNode
+		deviceInfo.DeviceName = output.DeviceName
 
-		// TODO: Add create and run job for nvme-of device switch to the next host
-		// Placeholder for the job creation and execution
+		// TODO: Add code to request the operator to transfer the OSD
+		// Placeholder code to update the CR and configmap for transfering the OSD
 	}
 
 	return reconcile.Result{}, nil
@@ -248,6 +246,25 @@ func (r *ReconcileNvmeOfStorage) getPods(context context.Context, namespace stri
 	return pods
 }
 
+func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
+	nextHostName := r.clustermanager.GetNextAttachableHost(deviceInfo.AttachedNode)
+	if nextHostName == "" {
+		panic(fmt.Sprintf("no attachable hosts found for device with SubNQN %s on node %s",
+			deviceInfo.SubNQN, deviceInfo.AttachedNode))
+	}
+
+	// Connect the device to the new host
+	output, err := r.clustermanager.ConnectOSDDeviceToHost(nextHostName, deviceInfo)
+	if err != nil {
+		panic(fmt.Sprintf("failed to connect device with SubNQN %s to host %s: %v",
+			deviceInfo.SubNQN, nextHostName, err))
+	}
+	logger.Debugf("successfully reassigned the device. SubNQN: %s, DeviceName: %s, AttachedNode: %s",
+		deviceInfo.SubNQN, deviceInfo.DeviceName, deviceInfo.AttachedNode)
+
+	return output
+}
+
 func isOSDPod(labels map[string]string) bool {
 	if labels["app"] == "rook-ceph-osd" && labels["ceph-osd-id"] != "" {
 		return true
@@ -266,4 +283,24 @@ func isPodDead(oldPod *corev1.Pod, newPod *corev1.Pod) bool {
 	}
 
 	return false
+}
+
+func getDeviceName(pods *corev1.PodList) string {
+	deviceName := ""
+	for _, envVar := range pods.Items[0].Spec.Containers[0].Env {
+		if envVar.Name == "ROOK_BLOCK_PATH" {
+			deviceName = envVar.Value
+			break
+		}
+	}
+	return deviceName
+}
+
+func getAttachedDeviceInfo(deviceList []cephv1.FabricDevice, attachedNode, deviceName string) cephv1.FabricDevice {
+	for _, device := range deviceList {
+		if device.AttachedNode == attachedNode && device.DeviceName == deviceName {
+			return device
+		}
+	}
+	panic("device not found")
 }
