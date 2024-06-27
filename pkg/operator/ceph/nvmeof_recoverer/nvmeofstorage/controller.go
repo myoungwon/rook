@@ -158,56 +158,12 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 			return reconcile.Result{}, err
 		}
 
-		// Retrieve the nvmeofstorage CR to update the CRUSH map
-		for i := range r.nvmeOfStorage.Spec.Devices {
-			device := &r.nvmeOfStorage.Spec.Devices[i]
-			// Get OSD pods with label "app=rook-ceph-osd"
-			var osdID, clusterName string
-			opts := metav1.ListOptions{
-				LabelSelector: "app=" + osd.AppName,
-			}
-			pods := r.getPods(context, request.Namespace, opts)
-			// Find the osd id and cluster name for the fabric device listed in the nvmeofstorage CR
-			for _, pod := range pods.Items {
-				for _, envVar := range pod.Spec.Containers[0].Env {
-					if envVar.Name == "ROOK_BLOCK_PATH" && envVar.Value == device.DeviceName {
-						osdID = pod.Labels["ceph-osd-id"]
-						clusterName = pod.Labels["app.kubernetes.io/part-of"]
-						break
-					}
-				}
-			}
+		r.reconstructCRUSHMap(context, request.Namespace)
 
-			// Update CRUSH map for OSD relocation to fabric failure domain
-			fabricHost := "fabric-host-" + r.nvmeOfStorage.Spec.Name
-			clusterInfo := cephclient.AdminClusterInfo(context, request.Namespace, clusterName)
-			cmd := []string{"osd", "crush", "move", "osd." + osdID, "host=" + fabricHost}
-			exec := cephclient.NewCephCommand(r.context, clusterInfo, cmd)
-			exec.JsonOutput = true
-			buf, err := exec.Run()
-			if err != nil {
-				logger.Error(err, "Failed to move osd", "osdID", osdID, "srcHost", device.AttachedNode,
-					"destHost", fabricHost, "result", string(buf))
-				panic(err)
-			}
-			logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
-				osdID, device.AttachedNode, fabricHost)
-
-			// Update the AttachableHosts
-			err = r.clustermanager.AddAttachbleHost(device.AttachedNode)
-			if err != nil {
-				panic(err)
-			}
-
-			// Update device endpoint map
-			r.clustermanager.UpdateDeviceEndpointeMap(r.nvmeOfStorage)
-
-			// Update the NvmeOfStorage CR to reflect the OSD ID
-			device.OsdID = osdID
-			err = r.client.Update(context, r.nvmeOfStorage)
-			if err != nil {
-				panic(fmt.Sprintf("Failed to update NVMeOfStorage: %v, Namespace: %s, Name: %s", err, request.Namespace, request.Name))
-			}
+		// Update the NvmeOfStorage CR to reflect the OSD ID
+		err = r.client.Update(context, r.nvmeOfStorage)
+		if err != nil {
+			panic(fmt.Sprintf("Failed to update NVMeOfStorage: %v, Namespace: %s, Name: %s", err, request.Namespace, request.Name))
 		}
 
 		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
@@ -231,6 +187,53 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 	}
 
 	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileNvmeOfStorage) reconstructCRUSHMap(context context.Context, namespace string) {
+	// Retrieve the nvmeofstorage CR to update the CRUSH map
+	for i := range r.nvmeOfStorage.Spec.Devices {
+		device := &r.nvmeOfStorage.Spec.Devices[i]
+		// Get OSD pods with label "app=rook-ceph-osd"
+		var clusterName string
+		opts := metav1.ListOptions{
+			LabelSelector: "app=" + osd.AppName,
+		}
+		pods := r.getPods(context, namespace, opts)
+		// Find the osd id and cluster name for the fabric device listed in the nvmeofstorage CR
+		for _, pod := range pods.Items {
+			for _, envVar := range pod.Spec.Containers[0].Env {
+				if envVar.Name == "ROOK_BLOCK_PATH" && envVar.Value == device.DeviceName {
+					device.OsdID = pod.Labels["ceph-osd-id"]
+					clusterName = pod.Labels["app.kubernetes.io/part-of"]
+					break
+				}
+			}
+		}
+
+		// Update CRUSH map for OSD relocation to fabric failure domain
+		fabricHost := "fabric-host-" + r.nvmeOfStorage.Spec.Name
+		clusterInfo := cephclient.AdminClusterInfo(context, namespace, clusterName)
+		cmd := []string{"osd", "crush", "move", "osd." + device.OsdID, "host=" + fabricHost}
+		exec := cephclient.NewCephCommand(r.context, clusterInfo, cmd)
+		exec.JsonOutput = true
+		buf, err := exec.Run()
+		if err != nil {
+			logger.Error(err, "Failed to move osd", "osdID", device.OsdID, "srcHost", device.AttachedNode,
+				"destHost", fabricHost, "result", string(buf))
+			panic(err)
+		}
+		logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
+			device.OsdID, device.AttachedNode, fabricHost)
+
+		// Update the AttachableHosts
+		err = r.clustermanager.AddAttachbleHost(device.AttachedNode)
+		if err != nil {
+			panic(err)
+		}
+
+		// Update device endpoint map
+		r.clustermanager.UpdateDeviceEndpointeMap(r.nvmeOfStorage)
+	}
 }
 
 func (r *ReconcileNvmeOfStorage) findTargetNvmeOfStorageCR(osdID string) cephv1.FabricDevice {
