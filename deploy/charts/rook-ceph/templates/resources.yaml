@@ -13161,6 +13161,8 @@ spec:
                     properties:
                       attachedNode:
                         type: string
+                      clusterName:
+                        type: string
                       deviceName:
                         type: string
                       osdID:
