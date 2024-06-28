@@ -48,14 +48,24 @@ func New(t *testing.T, nodes int) *fake.Clientset {
 
 // AddReadyNode adds a new Node with status "Ready" and the given name and IP.
 func AddReadyNode(t *testing.T, clientset *fake.Clientset, name, ip string) {
+	AddReadyNodeWithLabels(t, clientset, name, ip, map[string]string{})
+}
+
+// AddReadyNodeWithLabels adds a new Node with additional labels
+func AddReadyNodeWithLabels(t *testing.T, clientset *fake.Clientset, name, ip string, additionalLabels map[string]string) {
 	t.Helper()
 	ready := corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionTrue}
+	labels := map[string]string{
+		corev1.LabelHostname: name,
+	}
+	for key, value := range additionalLabels {
+		labels[key] = value
+	}
+
 	n := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
-			Labels: map[string]string{
-				corev1.LabelHostname: name,
-			},
-			Name: name,
+			Labels: labels,
+			Name:   name,
 		},
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{

@@ -19,6 +19,7 @@ package osd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +36,7 @@ import (
 	oposd "github.com/rook/rook/pkg/operator/ceph/cluster/osd"
 	cephver "github.com/rook/rook/pkg/operator/ceph/version"
 	"github.com/rook/rook/pkg/util/sys"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -161,7 +163,7 @@ func configRawDevice(name string, context *clusterd.Context) (*sys.LocalDisk, er
 }
 
 // Provision provisions an OSD
-func Provision(context *clusterd.Context, agent *OsdAgent, crushLocation, topologyAffinity, deviceFilter, metaDevice string) error {
+func Provision(context *clusterd.Context, agent *OsdAgent, deviceFilter, metaDevice string) error {
 	if agent.pvcBacked && os.Getenv(oposd.EncryptedDeviceEnvVarName) == "true" {
 		logger.Debug("encryption configuration detecting, populating kek to an env variable")
 		// Init KMS store, retrieve the KEK and store it as an env var for ceph-volume
@@ -238,9 +240,9 @@ func Provision(context *clusterd.Context, agent *OsdAgent, crushLocation, topolo
 	}
 
 	// Populate CRUSH location for each OSD on the host
-	for i := range deviceOSDs {
-		deviceOSDs[i].Location = crushLocation
-		deviceOSDs[i].TopologyAffinity = topologyAffinity
+	err = setCRUSHLocation(agent.clusterInfo.Context, context.Clientset, agent.nodeName, devices, deviceOSDs)
+	if err != nil {
+		return errors.Wrap(err, "failed to set CRUSH location")
 	}
 
 	logger.Infof("devices = %+v", deviceOSDs)
@@ -626,4 +628,26 @@ func GetOSDInfoById(context *clusterd.Context, clusterInfo *client.ClusterInfo, 
 	}
 
 	return nil, fmt.Errorf("failed to get details for OSD %d using ceph-volume list", osdID)
+}
+
+// setCRUSHLocation sets the CRUSH location for the given OSDs
+// use zone/region/hostname labels in the crushmap
+func setCRUSHLocation(context context.Context, clientset kubernetes.Interface, nodeName string, devices *DeviceOsdMapping, osds []oposd.OSDInfo) error {
+	for i := range osds {
+		crushHostname := os.Getenv("ROOK_CRUSHMAP_HOSTNAME")
+		_, deviceName := filepath.Split(osds[i].BlockPath)
+		if entry, ok := devices.Entries[deviceName]; ok {
+			if entry.Config.FailureDomain != "" {
+				crushHostname = entry.Config.FailureDomain
+			}
+		}
+		crushLocation, topologyAffinity, err := oposd.GetLocationWithNode(context, clientset, nodeName, os.Getenv(oposd.CrushRootVarName), crushHostname)
+		if err != nil {
+			return errors.Wrapf(err, "failed to set CRUSH location for osd %d", osds[i].ID)
+		}
+		osds[i].Location = crushLocation
+		osds[i].TopologyAffinity = topologyAffinity
+		logger.Infof("osd.%d will be placed in loc: %s, topologyAffinity: %s", osds[i].ID, osds[i].Location, osds[i].TopologyAffinity)
+	}
+	return nil
 }

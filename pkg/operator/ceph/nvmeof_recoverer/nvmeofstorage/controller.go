@@ -319,8 +319,12 @@ func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, 
 			cephCluster.Spec.Storage.Nodes[i].Devices = filteredDevices
 		} else if node.Name == newDeviceInfo.AttachedNode {
 			// Add the new device to the new node
+			fabricHost := FabricFailureDomainPrefix + "-" + r.nvmeOfStorage.Spec.Name
 			newDevice := cephv1.Device{
 				Name: newDeviceInfo.DeviceName,
+				Config: map[string]string{
+					"failureDomain": fabricHost,
+				},
 			}
 			// Check for existing device with the same name
 			for _, device := range node.Devices {

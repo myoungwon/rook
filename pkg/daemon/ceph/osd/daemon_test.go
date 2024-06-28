@@ -16,6 +16,8 @@ limitations under the License.
 package osd
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -23,10 +25,13 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rook/rook/pkg/clusterd"
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
+	oposd "github.com/rook/rook/pkg/operator/ceph/cluster/osd"
 	cephver "github.com/rook/rook/pkg/operator/ceph/version"
+	testexec "github.com/rook/rook/pkg/operator/test"
 	exectest "github.com/rook/rook/pkg/util/exec/test"
 	"github.com/rook/rook/pkg/util/sys"
 	"github.com/stretchr/testify/assert"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 const (
@@ -590,4 +595,52 @@ func TestGetVolumeGroupName(t *testing.T) {
 
 	vgName = getVolumeGroupName(invalidLVPath2)
 	assert.Equal(t, vgName, "")
+}
+
+func TestSetCRUSHLocation(t *testing.T) {
+	nodeName := "node0"
+	crushRoot := "default"
+	os.Setenv(oposd.CrushRootVarName, crushRoot)
+	fabricHost := "fabric-host-jBOF1"
+	topologyLocation := map[string]string{
+		"topology.rook.io/rack":       "rack1",
+		"topology.rook.io/row":        "row1",
+		"topology.rook.io/datacenter": "d1",
+	}
+
+	clientset := fake.NewSimpleClientset()
+	testexec.AddReadyNodeWithLabels(t, clientset, nodeName, "", topologyLocation)
+
+	desiredDevices := DeviceOsdMapping{
+		Entries: map[string]*DeviceOsdIDEntry{
+			"nvme0n1": {
+				Config: DesiredDevice{
+					FailureDomain: fabricHost,
+				},
+			},
+		},
+	}
+	foundOSDs := []oposd.OSDInfo{
+		{
+			ID:        0,
+			BlockPath: "/dev/nvme0n1",
+		},
+		{
+			ID:        1,
+			BlockPath: "/dev/nvme1n1",
+		},
+	}
+	// fakeLocation := "root=default host=ocs-deviceset-gp2-1-data-0-wh5wl region=us-east-1 zone=us-east-1c"
+
+	expectedLocation := fmt.Sprintf("root=%s host=%s datacenter=%s rack=%s row=%s", crushRoot, fabricHost,
+		topologyLocation["topology.rook.io/datacenter"], topologyLocation["topology.rook.io/rack"], topologyLocation["topology.rook.io/row"])
+	expectedTopology := fmt.Sprintf("topology.rook.io/rack=%s", topologyLocation["topology.rook.io/rack"])
+	err := setCRUSHLocation(context.TODO(), clientset, nodeName, &desiredDevices, foundOSDs)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedLocation, foundOSDs[0].Location)
+	assert.Equal(t, expectedTopology, foundOSDs[0].TopologyAffinity)
+
+	expectedLocation = fmt.Sprintf("root=%s host=%s datacenter=%s rack=%s row=%s", crushRoot, nodeName,
+		topologyLocation["topology.rook.io/datacenter"], topologyLocation["topology.rook.io/rack"], topologyLocation["topology.rook.io/row"])
+	assert.Equal(t, expectedLocation, foundOSDs[1].Location)
 }
