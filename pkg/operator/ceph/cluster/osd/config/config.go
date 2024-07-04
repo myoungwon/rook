@@ -33,6 +33,7 @@ const (
 	DeviceClassKey     = "deviceClass"
 	InitialWeightKey   = "initialWeight"
 	PrimaryAffinityKey = "primaryAffinity"
+	FailureDomainKey   = "failureDomain"
 )
 
 // StoreConfig represents the configuration of an OSD on a device.
@@ -46,6 +47,7 @@ type StoreConfig struct {
 	InitialWeight   string `json:"initialWeight,omitempty"`
 	PrimaryAffinity string `json:"primaryAffinity,omitempty"`
 	StoreType       string `json:"storeType,omitempty"`
+	FailureDomain   string `json:"failureDomain,omitempty"`
 }
 
 func (s StoreConfig) IsValidStoreType() bool {
@@ -91,6 +93,8 @@ func ToStoreConfig(config map[string]string) StoreConfig {
 			storeConfig.InitialWeight = v
 		case PrimaryAffinityKey:
 			storeConfig.PrimaryAffinity = v
+		case FailureDomainKey:
+			storeConfig.FailureDomain = v
 		}
 	}
 

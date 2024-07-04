@@ -17,14 +17,11 @@ limitations under the License.
 package ceph
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path"
 	"strconv"
 	"strings"
-
-	"k8s.io/client-go/kubernetes"
 
 	"github.com/pkg/errors"
 	"github.com/rook/rook/cmd/rook/rook"
@@ -242,12 +239,6 @@ func prepareOSD(cmd *cobra.Command, args []string) error {
 
 	context := createContext()
 	commonOSDInit(provisionCmd)
-	crushLocation, topologyAffinity, err := getLocation(cmd.Context(), context.Clientset)
-	if err != nil {
-		rook.TerminateFatal(err)
-	}
-	logger.Infof("crush location of osd: %s", crushLocation)
-
 	forceFormat := false
 
 	ownerRef := opcontroller.ClusterOwnerRef(clusterName, ownerRefID)
@@ -262,6 +253,7 @@ func prepareOSD(cmd *cobra.Command, args []string) error {
 
 	// destroy the OSD using the OSD ID
 	var replaceOSD *oposd.OSDReplaceInfo
+	var err error
 	if replaceOSDID != -1 {
 		logger.Infof("destroying osd.%d and cleaning its backing device", replaceOSDID)
 		replaceOSD, err = osddaemon.DestroyOSD(context, &clusterInfo, replaceOSDID, cfg.pvcBacked, cfg.storeConfig.EncryptedDevice)
@@ -277,7 +269,7 @@ func prepareOSD(cmd *cobra.Command, args []string) error {
 		metaDevice = cfg.metadataDevice
 	}
 
-	err = osddaemon.Provision(context, agent, crushLocation, topologyAffinity, deviceFilter, metaDevice)
+	err = osddaemon.Provision(context, agent, deviceFilter, metaDevice)
 	if err != nil {
 		// something failed in the OSD orchestration, update the status map with failure details
 		status := oposd.OrchestrationStatus{
@@ -347,20 +339,6 @@ func commonOSDInit(cmd *cobra.Command) {
 	clusterInfo.Monitors = opcontroller.ParseMonEndpoints(cfg.monEndpoints)
 }
 
-// use zone/region/hostname labels in the crushmap
-func getLocation(ctx context.Context, clientset kubernetes.Interface) (string, string, error) {
-	// get the value the operator instructed to use as the host name in the CRUSH map
-	hostNameLabel := os.Getenv("ROOK_CRUSHMAP_HOSTNAME")
-
-	rootLabel := os.Getenv(oposd.CrushRootVarName)
-
-	loc, topologyAffinity, err := oposd.GetLocationWithNode(ctx, clientset, os.Getenv(k8sutil.NodeNameEnvVar), rootLabel, hostNameLabel)
-	if err != nil {
-		return "", "", err
-	}
-	return loc, topologyAffinity, nil
-}
-
 // Parse the devices, which are sent as a JSON-marshalled list of device IDs with a StorageConfig spec
 func parseDevices(devices string) ([]osddaemon.DesiredDevice, error) {
 	if devices == "" {
@@ -383,6 +361,7 @@ func parseDevices(devices string) ([]osddaemon.DesiredDevice, error) {
 		d.DeviceClass = cd.StoreConfig.DeviceClass
 		d.InitialWeight = cd.StoreConfig.InitialWeight
 		d.MetadataDevice = cd.StoreConfig.MetadataDevice
+		d.FailureDomain = cd.StoreConfig.FailureDomain
 
 		if d.OSDsPerDevice < 1 {
 			return nil, errors.Errorf("osds per device should be greater than 0 (%q)", d.OSDsPerDevice)
