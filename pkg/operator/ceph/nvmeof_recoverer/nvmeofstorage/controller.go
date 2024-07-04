@@ -208,33 +208,32 @@ func (r *ReconcileNvmeOfStorage) reconstructCRUSHMap(context context.Context, na
 		// Find the osd id and cluster name for the fabric device listed in the nvmeofstorage CR
 		for _, pod := range pods.Items {
 			for _, envVar := range pod.Spec.Containers[0].Env {
-				if envVar.Name == "ROOK_BLOCK_PATH" && envVar.Value == device.DeviceName {
+				if pod.Spec.NodeName == device.AttachedNode && envVar.Name == "ROOK_BLOCK_PATH" && envVar.Value == device.DeviceName {
 					device.OsdID = pod.Labels["ceph-osd-id"]
 					clusterName = pod.Labels["app.kubernetes.io/part-of"]
-					break
+
+					// Update CRUSH map for OSD relocation to fabric failure domain
+					fabricHost := FabricFailureDomainPrefix + "-" + r.nvmeOfStorage.Spec.Name
+					clusterInfo := cephclient.AdminClusterInfo(context, namespace, clusterName)
+					cmd := []string{"osd", "crush", "move", "osd." + device.OsdID, "host=" + fabricHost}
+					exec := cephclient.NewCephCommand(r.context, clusterInfo, cmd)
+					exec.JsonOutput = true
+					buf, err := exec.Run()
+					if err != nil {
+						logger.Error(err, "Failed to move osd", "osdID", device.OsdID, "srcHost", device.AttachedNode,
+							"destHost", fabricHost, "result", string(buf))
+						panic(err)
+					}
+					logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
+						device.OsdID, device.AttachedNode, fabricHost)
+
+					// Update the AttachableHosts
+					err = r.clustermanager.AddAttachbleHost(device.AttachedNode)
+					if err != nil {
+						panic(err)
+					}
 				}
 			}
-		}
-
-		// Update CRUSH map for OSD relocation to fabric failure domain
-		fabricHost := FabricFailureDomainPrefix + "-" + r.nvmeOfStorage.Spec.Name
-		clusterInfo := cephclient.AdminClusterInfo(context, namespace, clusterName)
-		cmd := []string{"osd", "crush", "move", "osd." + device.OsdID, "host=" + fabricHost}
-		exec := cephclient.NewCephCommand(r.context, clusterInfo, cmd)
-		exec.JsonOutput = true
-		buf, err := exec.Run()
-		if err != nil {
-			logger.Error(err, "Failed to move osd", "osdID", device.OsdID, "srcHost", device.AttachedNode,
-				"destHost", fabricHost, "result", string(buf))
-			panic(err)
-		}
-		logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
-			device.OsdID, device.AttachedNode, fabricHost)
-
-		// Update the AttachableHosts
-		err = r.clustermanager.AddAttachbleHost(device.AttachedNode)
-		if err != nil {
-			panic(err)
 		}
 
 		// Update device endpoint map
