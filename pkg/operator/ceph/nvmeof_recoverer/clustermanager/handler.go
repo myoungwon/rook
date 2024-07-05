@@ -125,10 +125,10 @@ func (cm *ClusterManager) GetNextAttachableHost(currentHost string) string {
 	return ""
 }
 
-func (cm *ClusterManager) ConnectOSDDeviceToHost(targetHost string, fabricDeviceInfo cephv1.FabricDevice) (cephv1.FabricDevice, error) {
+func (cm *ClusterManager) ConnectOSDDeviceToHost(namespace, targetHost string, fabricDeviceInfo cephv1.FabricDevice) (cephv1.FabricDevice, error) {
 	output := *fabricDeviceInfo.DeepCopy()
 	connInfo := cm.NqnEndpointMap[fabricDeviceInfo.SubNQN]
-	newDevice, err := cm.runNvmeoFJob("connect", targetHost, connInfo.Address, connInfo.Port, fabricDeviceInfo.SubNQN)
+	newDevice, err := cm.runNvmeoFJob("connect", namespace, targetHost, connInfo.Address, connInfo.Port, fabricDeviceInfo.SubNQN)
 	if err == nil {
 		output.AttachedNode = targetHost
 		output.DeviceName = newDevice
@@ -136,16 +136,16 @@ func (cm *ClusterManager) ConnectOSDDeviceToHost(targetHost string, fabricDevice
 	return output, err
 }
 
-func (cm *ClusterManager) DisconnectOSDDevice(fabricDeviceInfo cephv1.FabricDevice) (string, error) {
-	return cm.runNvmeoFJob("disconnect", fabricDeviceInfo.AttachedNode, "", "", fabricDeviceInfo.SubNQN)
+func (cm *ClusterManager) DisconnectOSDDevice(namespace string, fabricDeviceInfo cephv1.FabricDevice) (string, error) {
+	return cm.runNvmeoFJob("disconnect", namespace, fabricDeviceInfo.AttachedNode, "", "", fabricDeviceInfo.SubNQN)
 }
 
-func (cm *ClusterManager) runNvmeoFJob(mode string, targetHost, address, port, subnqn string) (string, error) {
+func (cm *ClusterManager) runNvmeoFJob(mode, namespace, targetHost, address, port, subnqn string) (string, error) {
 	privileged := true
 	job := &batch.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "nvmeof-conn-control-job",
-			Namespace: "rook-ceph",
+			Namespace: namespace,
 		},
 		Spec: batch.JobSpec{
 			Template: v1.PodTemplateSpec{
@@ -217,5 +217,6 @@ func (cm *ClusterManager) runNvmeoFJob(mode string, targetHost, address, port, s
 		return "", errors.New(output)
 	}
 
+	logger.Debug("Successfully executed nvmeof connect/disconnect job. output: %s", output)
 	return output, nil
 }

@@ -180,7 +180,7 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 		r.cleanupOSD(request.Namespace, deviceInfo)
 
 		// Connect the device to the new attachable host
-		newDeviceInfo := r.reassignFaultedOSDDevice(deviceInfo)
+		newDeviceInfo := r.reassignFaultedOSDDevice(request.Namespace, deviceInfo)
 
 		// Request the OSD to be transferred to the next host
 		err := r.updateCephClusterCR(request, deviceInfo, newDeviceInfo)
@@ -272,14 +272,14 @@ func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.
 	}
 
 	// Disconnect the device used by this OSD
-	_, err = r.clustermanager.DisconnectOSDDevice(deviceInfo)
+	_, err = r.clustermanager.DisconnectOSDDevice(namespace, deviceInfo)
 	if err != nil {
 		panic(fmt.Sprintf("failed to disconnect OSD device with SubNQN %s: %v", deviceInfo.SubNQN, err))
 	}
 	logger.Debugf("successfully deleted the OSD deployment. Name: %q", osd.AppName+"-"+deviceInfo.OsdID)
 }
 
-func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
+func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
 	nextHostName := r.clustermanager.GetNextAttachableHost(deviceInfo.AttachedNode)
 	if nextHostName == "" {
 		panic(fmt.Sprintf("no attachable hosts found for device with SubNQN %s on node %s",
@@ -287,13 +287,13 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(deviceInfo cephv1.Fabr
 	}
 
 	// Connect the device to the new host
-	output, err := r.clustermanager.ConnectOSDDeviceToHost(nextHostName, deviceInfo)
+	output, err := r.clustermanager.ConnectOSDDeviceToHost(namespace, nextHostName, deviceInfo)
 	if err != nil {
 		panic(fmt.Sprintf("failed to connect device with SubNQN %s to host %s: %v",
 			deviceInfo.SubNQN, nextHostName, err))
 	}
 	logger.Debugf("successfully reassigned the device. SubNQN: %s, DeviceName: %s, AttachedNode: %s",
-		deviceInfo.SubNQN, deviceInfo.DeviceName, deviceInfo.AttachedNode)
+		deviceInfo.SubNQN, deviceInfo.DeviceName, output.AttachedNode)
 
 	return output
 }
