@@ -34,18 +34,17 @@ import time
 
 
 def get_nvme_devices():
-	result = subprocess.run(['nvme', 'list', '-o', 'json'],
-							stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-	devices = json.loads(result.stdout)
-	devices = {device['DevicePath'] for device in devices['Devices']}
-	return devices
+    result = subprocess.run(['nvme', 'list', '-o', 'json'],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    devices = json.loads(result.stdout)
+    return {device['DevicePath'] for device in devices.get('Devices', [])}
 
 def connect_nvme(subnqn, ip_address, port):
-	try:
-		devices_before = get_nvme_devices()
-		subprocess.run(['nvme', 'connect', '-t', 'tcp', '-n', subnqn,
-						'-a', ip_address, '-s', port], check=True)
-		time.sleep(1)
+    try:
+        devices_before = get_nvme_devices()
+        subprocess.run(['nvme', 'connect', '-t', 'tcp', '-n', subnqn,
+                        '-a', ip_address, '-s', port], check=True)
+        time.sleep(1)
     except subprocess.CalledProcessError as e:
         print('FAILED:', e)
     finally:
@@ -58,25 +57,23 @@ def connect_nvme(subnqn, ip_address, port):
             print('FAILED: No new devices connected.')
 
 def disconnect_nvme(subnqn):
-
-	try:
-		result = subprocess.run(['nvme', 'disconnect', '-n', subnqn],
-								stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-		output = result.stdout.strip()
-		print(output)
-	except subprocess.CalledProcessError as e:
-		print('FAILED:', e)
+    try:
+        result = subprocess.run(['nvme', 'disconnect', '-n', subnqn],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output = result.stdout.strip()
+        print(output)
+    except subprocess.CalledProcessError as e:
+        print('FAILED:', e)
 
 mode = "%s"
 address = "%s"
 port = "%s"
 subnqn = "%s"
 
-if mode and subnqn and address and port:
-    if mode == 'connect':
-        connect_nvme(subnqn, address, port)
-    elif mode == 'disconnect':
-        disconnect_nvme(subnqn)
+if mode == 'connect':
+    connect_nvme(subnqn, address, port)
+elif mode == 'disconnect':
+    disconnect_nvme(subnqn)
 `
 )
 
