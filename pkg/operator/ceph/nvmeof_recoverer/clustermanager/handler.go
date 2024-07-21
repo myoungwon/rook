@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -18,12 +19,6 @@ import (
 )
 
 var logger = capnslog.NewPackageLogger("github.com/rook/rook", "cluster-manager")
-
-// ConnectionInfo contains the address and port of a fabric device
-type ConnectionInfo struct {
-	Address string
-	Port    string
-}
 
 // Internal constants used only within this package
 const (
@@ -80,55 +75,59 @@ elif mode == 'disconnect':
 type ClusterManager struct {
 	context          *clusterd.Context
 	opManagerContext context.Context
-	HostExists       map[string]bool
-	AttachableHosts  []string
-	NqnEndpointMap   map[string]ConnectionInfo
+	fabricMap        FabricMap
 }
 
 func New(context *clusterd.Context, opManagerContext context.Context) *ClusterManager {
 	return &ClusterManager{
 		context:          context,
 		opManagerContext: opManagerContext,
-		HostExists:       make(map[string]bool),
-		AttachableHosts:  []string{},
-		NqnEndpointMap:   make(map[string]ConnectionInfo),
+		fabricMap:        NewOSDNodeMap(),
 	}
 }
 
-func (cm *ClusterManager) AddAttachbleHost(hostname string) error {
-	if !cm.HostExists[hostname] {
-		cm.AttachableHosts = append(cm.AttachableHosts, hostname)
-		cm.HostExists[hostname] = true
-	}
-
-	return nil
-}
-
-func (cm *ClusterManager) UpdateDeviceEndpointeMap(nvmeofstorage *cephv1.NvmeOfStorage) {
+// AddOSD adds an OSD to the fabric map
+func (cm *ClusterManager) AddOSD(osdID string, nvmeofstorage *cephv1.NvmeOfStorage) {
 	for _, device := range nvmeofstorage.Spec.Devices {
-		cm.NqnEndpointMap[device.SubNQN] = ConnectionInfo{
-			Address: nvmeofstorage.Spec.IP,
-			Port:    strconv.Itoa(device.Port),
+		if device.OsdID == osdID {
+			cm.fabricMap.AddOSD(osdID, device.AttachedNode, nvmeofstorage.Spec.IP, strconv.Itoa(device.Port), device.SubNQN)
+			break
 		}
 	}
 }
 
-func (cm *ClusterManager) GetNextAttachableHost(currentHost string) string {
-	if len(cm.AttachableHosts) == 0 {
-		return ""
+// GetNextAttachableHost returns the node with the least number of OSDs attached to it
+func (cm *ClusterManager) GetNextAttachableHost(osdID string) (string, error) {
+	output := ""
+	faultyNode, err := cm.fabricMap.FindNodeByOSD(osdID)
+	if err != nil {
+		return output, errors.New(fmt.Sprintf("Wrong OSD ID"))
 	}
-	for i, host := range cm.AttachableHosts {
-		if host == currentHost {
-			return cm.AttachableHosts[(i+1)%len(cm.AttachableHosts)]
+
+	// Find the node with the least number of OSDs
+	attachableNodes := cm.fabricMap.GetNodes()
+	minOSDs := math.MaxInt32
+	for _, node := range attachableNodes {
+		osds, _ := cm.fabricMap.FindOSDsByNode(node)
+		if node != faultyNode && len(osds) < minOSDs {
+			minOSDs = len(osds)
+			output = node
 		}
 	}
-	return ""
+
+	// Remove the fault node from the map
+	cm.fabricMap.RemoveOSD(osdID, faultyNode)
+
+	return output, nil
 }
 
 func (cm *ClusterManager) ConnectOSDDeviceToHost(namespace, targetHost string, fabricDeviceInfo cephv1.FabricDevice) (cephv1.FabricDevice, error) {
 	output := *fabricDeviceInfo.DeepCopy()
-	connInfo := cm.NqnEndpointMap[fabricDeviceInfo.SubNQN]
-	newDevice, err := cm.runNvmeoFJob("connect", namespace, targetHost, connInfo.Address, connInfo.Port, fabricDeviceInfo.SubNQN)
+	osdInfo, err := cm.fabricMap.FindOSDBySubNQN(fabricDeviceInfo.SubNQN)
+	if err != nil {
+		panic("OSD not found for subnqn")
+	}
+	newDevice, err := cm.runNvmeoFJob("connect", namespace, targetHost, osdInfo.address, osdInfo.port, osdInfo.subnqn)
 	if err == nil {
 		output.AttachedNode = targetHost
 		output.DeviceName = newDevice
