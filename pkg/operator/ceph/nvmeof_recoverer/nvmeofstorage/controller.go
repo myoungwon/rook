@@ -177,13 +177,16 @@ func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reco
 		deviceInfo := r.findTargetNvmeOfStorageCR(osdID)
 
 		// Cleanup the OSD that is in CrashLoopBackOff
-		r.cleanupOSD(request.Namespace, deviceInfo)
+		err := r.cleanupOSD(request.Namespace, deviceInfo)
+		if err != nil {
+			return opcontroller.ImmediateRetryResult, err
+		}
 
 		// Connect the device to the new attachable host
 		newDeviceInfo := r.reassignFaultedOSDDevice(request.Namespace, deviceInfo)
 
 		// Request the OSD to be transferred to the next host
-		err := r.updateCephClusterCR(request, deviceInfo, newDeviceInfo)
+		err = r.updateCephClusterCR(request, deviceInfo, newDeviceInfo)
 		if err != nil {
 			logger.Errorf("unable to update CephCluster CR, err: %v", err)
 			return reconcile.Result{}, err
@@ -258,7 +261,7 @@ func (r *ReconcileNvmeOfStorage) getPods(context context.Context, namespace stri
 	return pods
 }
 
-func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.FabricDevice) {
+func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.FabricDevice) error {
 	// Delete the OSD deployment that is in CrashLoopBackOff
 	err := k8sutil.DeleteDeployment(
 		r.opManagerContext,
@@ -267,7 +270,7 @@ func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.
 		osd.AppName+"-"+deviceInfo.OsdID,
 	)
 	if err != nil {
-		panic(fmt.Sprintf("failed to delete OSD deployment %q in namespace %q: %v",
+		return errors.Wrap(err, fmt.Sprintf("failed to delete OSD deployment %q in namespace %q: %v",
 			osd.AppName+"-"+deviceInfo.OsdID, namespace, err))
 	}
 
@@ -277,6 +280,7 @@ func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.
 		panic(fmt.Sprintf("failed to disconnect OSD device with SubNQN %s: %v", deviceInfo.SubNQN, err))
 	}
 	logger.Debugf("successfully deleted the OSD deployment. Name: %q", osd.AppName+"-"+deviceInfo.OsdID)
+	return nil
 }
 
 func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
