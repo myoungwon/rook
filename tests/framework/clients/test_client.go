@@ -38,6 +38,7 @@ type TestClient struct {
 	TopicClient        *TopicOperation
 	NotificationClient *NotificationOperation
 	COSIClient         *COSIOperation
+	RecovererClient    *NvmeofRecovererOperation
 	k8sh               *utils.K8sHelper
 }
 
@@ -56,6 +57,7 @@ func CreateTestClient(k8sHelper *utils.K8sHelper, manifests installer.CephManife
 		CreateTopicOperation(k8sHelper, manifests),
 		CreateNotificationOperation(k8sHelper, manifests),
 		CreateCOSIOperation(k8sHelper, manifests),
+		CreateNvmeofRecovererOperation(k8sHelper, manifests),
 		k8sHelper,
 	}
 }
