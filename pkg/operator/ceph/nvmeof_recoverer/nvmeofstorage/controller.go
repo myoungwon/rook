@@ -337,6 +337,28 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, devi
 	// Update the attached node for reassigning the device
 	r.clustermanager.AddOSD(output.OsdID, r.nvmeOfStorage)
 
+	// TODO (cheolho.kang): these lines should be moved to initialization phase. Other updatable data (e.g., device name, attached node) should be separated from CR and managed via k8s (e.g., etcd, configmap) (PBDEV-1748)
+	// Update the NvmeOfStorage CR
+	for i := range r.nvmeOfStorage.Spec.Devices {
+		device := &r.nvmeOfStorage.Spec.Devices[i]
+		if device.OsdID == deviceInfo.OsdID {
+			if output.AttachedNode == "" {
+				// it means no nodes are available for reassignment
+				// In this case, the device will be removed from the nvmeOfStorage CR
+				r.nvmeOfStorage.Spec.Devices = append(r.nvmeOfStorage.Spec.Devices[:i], r.nvmeOfStorage.Spec.Devices[i+1:]...)
+				logger.Debug("OSD.%s will not be reassigned to any node", device.OsdID)
+			} else {
+				device.AttachedNode = output.AttachedNode
+				device.DeviceName = output.DeviceName
+			}
+			break
+		}
+	}
+	err = r.client.Update(r.opManagerContext, r.nvmeOfStorage)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to update NVMeOfStorage: %s, error: %+v", r.nvmeOfStorage.Name, err))
+	}
+
 	logger.Debugf("successfully reassigned the device for OSD.%s. host: [%s --> %s], device: [%s --> %s], SubNQN: %s",
 		output.OsdID, deviceInfo.AttachedNode, output.AttachedNode, deviceInfo.DeviceName, output.DeviceName, output.SubNQN)
 
