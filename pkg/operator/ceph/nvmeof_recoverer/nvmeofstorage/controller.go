@@ -126,6 +126,10 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 					return false
 				}
 				if isOSDPod(newPod.Labels) && isPodDead(oldPod, newPod) {
+					// Prevents redundant Reconciler triggers during the cleanup of a faulty OSD pod by the nvmeofstorage controller.
+					if newPod.DeletionTimestamp != nil {
+						return false
+					}
 					namespacedName := fmt.Sprintf("%s/%s", newPod.Namespace, newPod.Name)
 					logger.Debugf("update event on Pod %q", namespacedName)
 					return true
