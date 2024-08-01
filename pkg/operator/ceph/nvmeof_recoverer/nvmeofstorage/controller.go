@@ -271,17 +271,11 @@ func (r *ReconcileNvmeOfStorage) reconstructCRUSHMap(context context.Context, na
 					logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
 						device.OsdID, device.AttachedNode, fabricHost)
 
-					// Update the AttachableHosts
-					err = r.clustermanager.AddAttachbleHost(device.AttachedNode)
-					if err != nil {
-						panic(err)
-					}
+					// Update the OSD deployment depending on the nvmeofstorage CR
+					r.clustermanager.AddOSD(device.OsdID, r.nvmeOfStorage)
 				}
 			}
 		}
-
-		// Update device endpoint map
-		r.clustermanager.UpdateDeviceEndpointeMap(r.nvmeOfStorage)
 	}
 }
 
@@ -324,10 +318,13 @@ func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.
 }
 
 func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
-	nextHostName := r.clustermanager.GetNextAttachableHost(deviceInfo.AttachedNode)
+	nextHostName, err := r.clustermanager.GetNextAttachableHost(deviceInfo.OsdID)
+	if err != nil {
+		panic(fmt.Sprintf("Wrong Info"))
+	}
 	if nextHostName == "" {
-		panic(fmt.Sprintf("no attachable hosts found for device with SubNQN %s on node %s",
-			deviceInfo.SubNQN, deviceInfo.AttachedNode))
+		// Return an empty struct when there is no attachable host, which means this OSD will be removed and rebalanced by Ceph
+		return cephv1.FabricDevice{}
 	}
 
 	// Connect the device to the new host
@@ -336,8 +333,12 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, devi
 		panic(fmt.Sprintf("failed to connect device with SubNQN %s to host %s: %v",
 			deviceInfo.SubNQN, nextHostName, err))
 	}
-	logger.Debugf("successfully reassigned the device. SubNQN: %s, DeviceName: %s, AttachedNode: %s",
-		deviceInfo.SubNQN, deviceInfo.DeviceName, output.AttachedNode)
+
+	// Update the attached node for reassigning the device
+	r.clustermanager.AddOSD(output.OsdID, r.nvmeOfStorage)
+
+	logger.Debugf("successfully reassigned the device for OSD.%s. host: [%s --> %s], device: [%s --> %s], SubNQN: %s",
+		output.OsdID, deviceInfo.AttachedNode, output.AttachedNode, deviceInfo.DeviceName, output.DeviceName, output.SubNQN)
 
 	return output
 }
