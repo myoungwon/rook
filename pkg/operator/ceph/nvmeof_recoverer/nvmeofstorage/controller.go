@@ -54,6 +54,21 @@ const (
 	FabricFailureDomainPrefix = "fabric-host"
 )
 
+// INITIALIZATION -> ACTIVATED
+type ControllerState int
+
+const (
+	INITIALIZATION = iota
+	ACTIVATED
+)
+
+const (
+	CR_UPDATED = iota
+	OSD_STATE_CHANGED
+)
+
+var state = INITIALIZATION
+
 var logger = capnslog.NewPackageLogger("github.com/rook/rook", controllerName)
 
 var nvmeOfStorageKind = reflect.TypeOf(cephv1.NvmeOfStorage{}).Name()
@@ -153,50 +168,75 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	return nil
 }
 
+func (r *ReconcileNvmeOfStorage) getSystemEvent(e string) ControllerState {
+	if strings.Contains(e, "nvmeofstorage") {
+		return CR_UPDATED
+	} else if strings.Contains(e, "rook-ceph-osd") {
+		return OSD_STATE_CHANGED
+	}
+	panic("wrong event type")
+}
+
+func (r *ReconcileNvmeOfStorage) initFabricMap(context context.Context, request reconcile.Request) error {
+	// Fetch the NvmeOfStorage CRD object
+	err := r.client.Get(r.opManagerContext, request.NamespacedName, r.nvmeOfStorage)
+	if err != nil {
+		logger.Errorf("unable to fetch NvmeOfStorage, err: %v", err)
+		return err
+	}
+
+	r.reconstructCRUSHMap(context, request.Namespace)
+
+	// Update the NvmeOfStorage CR to reflect the OSD ID
+	err = r.client.Update(context, r.nvmeOfStorage)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to update NVMeOfStorage: %v, Namespace: %s, Name: %s", err, request.Namespace, request.Name))
+	}
+	return err
+}
+
+func (r *ReconcileNvmeOfStorage) tryRelocateDevice(request reconcile.Request) error {
+	// Get the fabric device info details for the given request
+	osdID := strings.Split(strings.Split(request.Name, osd.AppName+"-")[1], "-")[0]
+	deviceInfo := r.findTargetNvmeOfStorageCR(osdID)
+
+	// Cleanup the OSD that is in CrashLoopBackOff
+	r.cleanupOSD(request.Namespace, deviceInfo)
+
+	// Connect the device to the new attachable host
+	newDeviceInfo := r.reassignFaultedOSDDevice(request.Namespace, deviceInfo)
+
+	// Request the OSD to be transferred to the next host
+	err := r.updateCephClusterCR(request, deviceInfo, newDeviceInfo)
+	if err != nil {
+		logger.Errorf("unable to update CephCluster CR, err: %v", err)
+		return err
+	}
+	return err
+}
+
 func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reconcile.Request) (reconcile.Result, error) {
 	logger.Debugf("reconciling NvmeOfStorage. Request.Namespace: %s, Request.Name: %s", request.Namespace, request.Name)
 
-	if strings.Contains(request.Name, "nvmeofstorage") {
-		// Fetch the NvmeOfStorage CRD object
-		err := r.client.Get(r.opManagerContext, request.NamespacedName, r.nvmeOfStorage)
-		if err != nil {
-			logger.Errorf("unable to fetch NvmeOfStorage, err: %v", err)
-			return reconcile.Result{}, err
+	event := r.getSystemEvent(request.Name)
+	var err error
+	if event == CR_UPDATED {
+		if state != INITIALIZATION {
+			panic("impossible")
 		}
-
-		r.reconstructCRUSHMap(context, request.Namespace)
-
-		// Update the NvmeOfStorage CR to reflect the OSD ID
-		err = r.client.Update(context, r.nvmeOfStorage)
-		if err != nil {
-			panic(fmt.Sprintf("Failed to update NVMeOfStorage: %v, Namespace: %s, Name: %s", err, request.Namespace, request.Name))
+		err = r.initFabricMap(context, request)
+		state = ACTIVATED
+	} else if event == OSD_STATE_CHANGED {
+		if state == INITIALIZATION {
+			panic("impossible")
 		}
-
-		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
-		// TODO (cheolho.kang): Refactor this method to use a more reliable way of identifying the events,
-		// such as checking labels or annotations, instead of string parsing.
-	} else if strings.Contains(request.Name, "rook-ceph-osd") {
-		// Get the fabric device info details for the given request
-		osdID := strings.Split(strings.Split(request.Name, osd.AppName+"-")[1], "-")[0]
-		deviceInfo := r.findTargetNvmeOfStorageCR(osdID)
-
-		// Cleanup the OSD that is in CrashLoopBackOff
-		r.cleanupOSD(request.Namespace, deviceInfo)
-
-		// Connect the device to the new attachable host
-		newDeviceInfo := r.reassignFaultedOSDDevice(request.Namespace, deviceInfo)
-
-		// Request the OSD to be transferred to the next host
-		err := r.updateCephClusterCR(request, deviceInfo, newDeviceInfo)
-		if err != nil {
-			logger.Errorf("unable to update CephCluster CR, err: %v", err)
-			return reconcile.Result{}, err
-		}
-
-		return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, nil)
+		err = r.tryRelocateDevice(request)
+		state = ACTIVATED
+	} else {
+		return reconcile.Result{}, nil
 	}
 
-	return reconcile.Result{}, nil
+	return reporting.ReportReconcileResult(logger, r.recorder, request, r.nvmeOfStorage, reconcile.Result{}, err)
 }
 
 func (r *ReconcileNvmeOfStorage) reconstructCRUSHMap(context context.Context, namespace string) {
