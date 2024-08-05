@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"emperror.dev/errors"
 	"github.com/coreos/pkg/capnslog"
@@ -37,6 +38,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -184,6 +186,10 @@ func (r *ReconcileNvmeOfStorage) initFabricMap(context context.Context, request 
 		logger.Errorf("unable to fetch NvmeOfStorage, err: %v", err)
 		return err
 	}
+
+	// Wait for all OSDs to be up
+	// If trying to update the CRUSH Map before all OSDs are up, the CRUSH Map updates might not apply correctly.
+	r.waitForOSDsUp(context, request.Namespace, 1*time.Minute)
 
 	r.reconstructCRUSHMap(context, request.Namespace)
 
@@ -414,6 +420,42 @@ func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, 
 	return nil
 }
 
+func (r *ReconcileNvmeOfStorage) waitForOSDsUp(ctx context.Context, namespace, domainName string, timeOut time.Duration) error {
+	runningOSDs := 0
+	err := wait.PollUntilContextTimeout(ctx, 3*time.Second, timeOut, true, func(context context.Context) (done bool, err error) {
+		var pods *corev1.PodList
+		pods = r.getPods(context, namespace, metav1.ListOptions{LabelSelector: "app=" + osd.AppName})
+		runningOSDs = 0
+		for _, pod := range pods.Items {
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					deviceName := getDeviceName(pod)
+					for _, fabricDevice := range r.nvmeOfStorage.Spec.Devices {
+						if pod.Spec.NodeName == fabricDevice.AttachedNode && deviceName == fabricDevice.DeviceName {
+							runningOSDs++
+						}
+					}
+				}
+			}
+		}
+		if runningOSDs >= len(r.nvmeOfStorage.Spec.Devices) {
+			logger.Debugf("All OSDs are up. (%d/%d)",
+				runningOSDs, len(r.nvmeOfStorage.Spec.Devices))
+			return true, nil
+		}
+
+		logger.Debugf("OSDs used by the NvmeOfStorage CR are not up yet. (%d/%d)",
+			runningOSDs, len(r.nvmeOfStorage.Spec.Devices))
+		return false, nil
+	})
+	if err != nil {
+		logger.Debugf("timeout waiting for OSDs to be up. numFabricDevices: %d, runningOSDs: %d",
+			len(r.nvmeOfStorage.Spec.Devices), runningOSDs)
+	}
+
+	return err
+}
+
 func isOSDPod(labels map[string]string) bool {
 	if labels["app"] == "rook-ceph-osd" && labels["ceph-osd-id"] != "" {
 		return true
@@ -434,9 +476,9 @@ func isPodDead(oldPod *corev1.Pod, newPod *corev1.Pod) bool {
 	return false
 }
 
-func getDeviceName(pods *corev1.PodList) string {
+func getDeviceName(pod corev1.Pod) string {
 	deviceName := ""
-	for _, envVar := range pods.Items[0].Spec.Containers[0].Env {
+	for _, envVar := range pod.Spec.Containers[0].Env {
 		if envVar.Name == "ROOK_BLOCK_PATH" {
 			deviceName = envVar.Value
 			break
