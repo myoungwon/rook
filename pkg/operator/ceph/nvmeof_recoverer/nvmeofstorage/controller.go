@@ -185,6 +185,13 @@ func (r *ReconcileNvmeOfStorage) initFabricMap(context context.Context, request 
 		return err
 	}
 
+	// Check fabric devices are connected to the target node that is specified in the NvmeOfStorage CR
+	r.nvmeOfStorage, err = r.checkFabricDevices(context, r.nvmeOfStorage, request.Namespace)
+	if err != nil {
+		logger.Errorf("ERR: unable to check fabric devices, err: %v", err)
+		return err
+	}
+
 	r.reconstructCRUSHMap(context, request.Namespace)
 
 	// Update the NvmeOfStorage CR to reflect the OSD ID
@@ -414,6 +421,40 @@ func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, 
 	return nil
 }
 
+// checkFabricDevices checks fabric devices are connected to the target OSDs.
+// if different from nvmeOfStorage CR, it will be updated based on the actual status.
+func (r *ReconcileNvmeOfStorage) checkFabricDevices(context context.Context, nvmeOfStorage *cephv1.NvmeOfStorage, namespace string) (*cephv1.NvmeOfStorage, error) {
+	// Check if the fabric devices are connected to the target node
+	output := nvmeOfStorage.DeepCopy()
+	opts := metav1.ListOptions{
+		LabelSelector: "app=" + osd.AppName,
+	}
+	pods := r.getPods(context, namespace, opts)
+	for _, pod := range pods.Items {
+		podName := pod.ObjectMeta.Name
+		deviceName := getDeviceName(pod)
+		nqn, _ := r.clustermanager.GetNQNFromOSDPod(context, podName, deviceName, namespace)
+		if nqn == "" {
+			logger.Debugf("Fabric device for %s is not found", podName)
+			continue
+		}
+		for i := range output.Spec.Devices {
+			device := &output.Spec.Devices[i]
+			if device.SubNQN == nqn {
+				if device.DeviceName != deviceName || device.AttachedNode != pod.Spec.NodeName {
+					device.DeviceName = deviceName
+					device.AttachedNode = pod.Spec.NodeName
+					logger.Debugf("Fix fabric map. [Pod: %s, node: %s, deviceName: %s, NQN: %s]", podName, pod.Spec.NodeName, deviceName, nqn)
+				}
+				break
+			}
+		}
+		logger.Debugf("Successfully checked fabric device. Pod: %s, attachedNode: %s, deviceName: %s, nqn: %s", podName, pod.Spec.NodeName, deviceName, nqn)
+	}
+
+	return output, nil
+}
+
 func isOSDPod(labels map[string]string) bool {
 	if labels["app"] == "rook-ceph-osd" && labels["ceph-osd-id"] != "" {
 		return true
@@ -434,9 +475,9 @@ func isPodDead(oldPod *corev1.Pod, newPod *corev1.Pod) bool {
 	return false
 }
 
-func getDeviceName(pods *corev1.PodList) string {
+func getDeviceName(pod corev1.Pod) string {
 	deviceName := ""
-	for _, envVar := range pods.Items[0].Spec.Containers[0].Env {
+	for _, envVar := range pod.Spec.Containers[0].Env {
 		if envVar.Name == "ROOK_BLOCK_PATH" {
 			deviceName = envVar.Value
 			break

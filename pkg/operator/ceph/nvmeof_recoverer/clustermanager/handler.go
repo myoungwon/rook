@@ -2,6 +2,7 @@ package clustermanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -13,6 +14,7 @@ import (
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/operator/k8sutil"
+	"github.com/rook/rook/pkg/util/exec"
 	batch "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -72,6 +74,10 @@ elif mode == 'disconnect':
 `
 )
 
+type NVMeInfo struct {
+	SubNQN string `json:"subnqn"`
+}
+
 type ClusterManager struct {
 	context          *clusterd.Context
 	opManagerContext context.Context
@@ -119,6 +125,32 @@ func (cm *ClusterManager) GetNextAttachableHost(osdID string) (string, error) {
 	cm.fabricMap.RemoveOSD(osdID, faultyNode)
 
 	return output, nil
+}
+
+func (cm *ClusterManager) GetNQNFromOSDPod(context context.Context, podName, deviceName, namespace string) (string, error) {
+	execOpt := exec.ExecOptions{
+		Command:            []string{"nvme", "id-ctrl", deviceName, "-o", "json"},
+		Namespace:          namespace,
+		PodName:            podName,
+		ContainerName:      "osd",
+		Stdin:              nil,
+		CaptureStdout:      true,
+		CaptureStderr:      true,
+		PreserveWhitespace: false,
+	}
+	output, stderr, err := cm.context.RemoteExecutor.ExecWithOptions(context, execOpt)
+	if err != nil {
+		logger.Errorf("failed to get NQN from osd pod. err: %v, stderr: %s", err, stderr)
+		return "", err
+	}
+	var nvmeInfo NVMeInfo
+	err = json.Unmarshal([]byte(output), &nvmeInfo)
+	if err != nil {
+		logger.Debugf("Error parsing JSON for %s, deviceName: %s, err: %v\n", podName, deviceName, err)
+		return "", err
+	}
+
+	return nvmeInfo.SubNQN, nil
 }
 
 func (cm *ClusterManager) ConnectOSDDeviceToHost(namespace, targetHost string, fabricDeviceInfo cephv1.FabricDevice) (cephv1.FabricDevice, error) {
