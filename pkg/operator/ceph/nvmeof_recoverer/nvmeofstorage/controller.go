@@ -49,9 +49,8 @@ import (
 )
 
 const (
-	controllerName = "nvmeofstorage-controller"
-	// FabricFailureDomainPrefix is the prefix for the fabric failure domain name
-	FabricFailureDomainPrefix = "fabric-host"
+	controllerName            = "nvmeofstorage-controller"
+	FabricFailureDomainPrefix = "fabric-host" // FabricFailureDomainPrefix is the prefix for the fabric failure domain name
 )
 
 // INITIALIZATION -> ACTIVATED
@@ -89,8 +88,7 @@ type ReconcileNvmeOfStorage struct {
 	nvmeOfStorage    *cephv1.NvmeOfStorage
 }
 
-// Add creates a new NvmeOfStorage Controller and adds it to the Manager. The Manager will set fields on the Controller
-// and Start it when the Manager is Started.
+// Add creates a new NvmeOfStorage Controller and adds it to the Manager.
 func Add(mgr manager.Manager, context *clusterd.Context, opManagerContext context.Context, opConfig opcontroller.OperatorConfig) error {
 	return add(mgr, newReconciler(mgr, context, opManagerContext))
 }
@@ -193,8 +191,10 @@ func (r *ReconcileNvmeOfStorage) initFabricMap(context context.Context, request 
 }
 
 func (r *ReconcileNvmeOfStorage) tryRelocateDevice(request reconcile.Request) error {
-	// Get the fabric device info details for the given request
+	// Get the osdID from the OSD pod name
 	osdID := strings.Split(strings.Split(request.Name, osd.AppName+"-")[1], "-")[0]
+
+	// Get the fabric device descriptor for the given osdID
 	deviceInfo := r.findTargetNvmeOfStorageCR(osdID)
 
 	// Cleanup the OSD that is in CrashLoopBackOff
@@ -294,6 +294,7 @@ func (r *ReconcileNvmeOfStorage) getPods(context context.Context, namespace stri
 	return pods
 }
 
+// cleanupOSD cleans up the OSD deployment and disconnects the device
 func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.FabricDevice) {
 	// Delete the OSD deployment that is in CrashLoopBackOff
 	err := k8sutil.DeleteDeployment(
@@ -316,6 +317,7 @@ func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.
 }
 
 func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
+	// Get the new host for the OSD reassignment
 	nextHostName, err := r.clustermanager.GetNextAttachableHost(deviceInfo.OsdID)
 	if err != nil {
 		panic(fmt.Sprintf("Wrong Info"))
@@ -325,9 +327,11 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, devi
 		return cephv1.FabricDevice{}
 	}
 
-	// Connect the device to the new host
+	// Reassign the device to the new host
 	output, err := r.clustermanager.ConnectOSDDeviceToHost(namespace, nextHostName, deviceInfo)
 	if err != nil {
+		// TODO (cheolho.kang): If connectOSDDeviceToNode fails due to an abnormal targetNode,
+		// implement logic to exclude the current targetNode and search for the next attachable node.
 		panic(fmt.Sprintf("failed to connect device with SubNQN %s to host %s: %v",
 			deviceInfo.SubNQN, nextHostName, err))
 	}
@@ -364,6 +368,7 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, devi
 }
 
 func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, oldDeviceInfo, newDeviceInfo cephv1.FabricDevice) error {
+	// Fetch the CephCluster CR
 	cephCluster, err := r.context.RookClientset.CephV1().CephClusters(request.Namespace).Get(context.Background(), newDeviceInfo.ClusterName, metav1.GetOptions{})
 	if err != nil {
 		logger.Errorf("failed to get CephCluster CR. err: %v", err)
