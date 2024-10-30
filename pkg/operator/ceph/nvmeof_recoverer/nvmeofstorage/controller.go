@@ -174,8 +174,7 @@ func (r *ReconcileNvmeOfStorage) getSystemEvent(e string) ControllerState {
 
 func (r *ReconcileNvmeOfStorage) initFabricMap(context context.Context, request reconcile.Request) error {
 	// Fetch the NvmeOfStorage CRD object
-	err := r.client.Get(r.opManagerContext, request.NamespacedName, r.nvmeOfStorage)
-	if err != nil {
+	if err := r.client.Get(r.opManagerContext, request.NamespacedName, r.nvmeOfStorage); err != nil {
 		logger.Errorf("unable to fetch NvmeOfStorage, err: %v", err)
 		return err
 	}
@@ -183,16 +182,15 @@ func (r *ReconcileNvmeOfStorage) initFabricMap(context context.Context, request 
 	r.reconstructCRUSHMap(context, request.Namespace)
 
 	// Update the NvmeOfStorage CR to reflect the OSD ID
-	err = r.client.Update(context, r.nvmeOfStorage)
-	if err != nil {
+	if err := r.client.Update(context, r.nvmeOfStorage); err != nil {
 		panic(fmt.Sprintf("Failed to update NVMeOfStorage: %v, Namespace: %s, Name: %s", err, request.Namespace, request.Name))
 	}
-	return err
+	return nil
 }
 
 func (r *ReconcileNvmeOfStorage) tryRelocateDevice(request reconcile.Request) error {
 	// Get the osdID from the OSD pod name
-	osdID := strings.Split(strings.Split(request.Name, osd.AppName+"-")[1], "-")[0]
+	osdID := strings.Split(strings.TrimPrefix(request.Name, osd.AppName+"-"), "-")[0]
 
 	// Get the fabric device descriptor for the given osdID
 	deviceInfo := r.findTargetNvmeOfStorageCR(osdID)
@@ -204,12 +202,7 @@ func (r *ReconcileNvmeOfStorage) tryRelocateDevice(request reconcile.Request) er
 	newDeviceInfo := r.reassignFaultedOSDDevice(request.Namespace, deviceInfo)
 
 	// Request the OSD to be transferred to the next node
-	err := r.updateCephClusterCR(request, deviceInfo, newDeviceInfo)
-	if err != nil {
-		logger.Errorf("unable to update CephCluster CR, err: %v", err)
-		return err
-	}
-	return err
+	return r.updateCephClusterCR(request.Namespace, deviceInfo, newDeviceInfo)
 }
 
 func (r *ReconcileNvmeOfStorage) Reconcile(context context.Context, request reconcile.Request) (reconcile.Result, error) {
@@ -297,31 +290,27 @@ func (r *ReconcileNvmeOfStorage) getPods(context context.Context, namespace stri
 // cleanupOSD cleans up the OSD deployment and disconnects the device
 func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.FabricDevice) {
 	// Delete the OSD deployment that is in CrashLoopBackOff
-	err := k8sutil.DeleteDeployment(
+	podName := osd.AppName + "-" + deviceInfo.OsdID
+	if err := k8sutil.DeleteDeployment(
 		r.opManagerContext,
 		r.context.Clientset,
 		namespace,
-		osd.AppName+"-"+deviceInfo.OsdID,
-	)
-	if err != nil {
+		podName,
+	); err != nil {
 		panic(fmt.Sprintf("failed to delete OSD deployment %q in namespace %q: %v",
-			osd.AppName+"-"+deviceInfo.OsdID, namespace, err))
+			podName, namespace, err))
 	}
-	logger.Debugf("successfully deleted the OSD deployment. Name: %q", osd.AppName+"-"+deviceInfo.OsdID)
+	logger.Debugf("successfully deleted the OSD deployment. Name: %q", podName)
 
 	// Disconnect the device used by this OSD
-	_, err = r.clustermanager.DisconnectOSDDevice(namespace, deviceInfo)
-	if err != nil {
+	if _, err := r.clustermanager.DisconnectOSDDevice(namespace, deviceInfo); err != nil {
 		panic(fmt.Sprintf("failed to disconnect OSD device with SubNQN %s: %v", deviceInfo.SubNQN, err))
 	}
 }
 
 func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
 	// Get the new host for the OSD reassignment
-	targetNode, err := r.clustermanager.GetNextAttachableNode(deviceInfo.OsdID)
-	if err != nil {
-		panic(fmt.Sprintf("Wrong Info"))
-	}
+	targetNode := r.clustermanager.GetNextAttachableNode(deviceInfo)
 	if targetNode == "" {
 		// Return an empty struct when there is no attachable node, which means this OSD will be removed and rebalanced by Ceph
 		return cephv1.FabricDevice{}
@@ -367,9 +356,13 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, devi
 	return output
 }
 
-func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, oldDeviceInfo, newDeviceInfo cephv1.FabricDevice) error {
+func (r *ReconcileNvmeOfStorage) updateCephClusterCR(namespace string, oldDeviceInfo, newDeviceInfo cephv1.FabricDevice) error {
 	// Fetch the CephCluster CR
-	cephCluster, err := r.context.RookClientset.CephV1().CephClusters(request.Namespace).Get(context.Background(), newDeviceInfo.ClusterName, metav1.GetOptions{})
+	cephCluster, err := r.context.RookClientset.CephV1().CephClusters(namespace).Get(
+		r.opManagerContext,
+		newDeviceInfo.ClusterName,
+		metav1.GetOptions{},
+	)
 	if err != nil {
 		logger.Errorf("failed to get CephCluster CR. err: %v", err)
 		return err
@@ -407,8 +400,11 @@ func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, 
 	}
 
 	// Apply the updated CephCluster CR
-	_, err = r.context.RookClientset.CephV1().CephClusters(request.Namespace).Update(context.TODO(), cephCluster, metav1.UpdateOptions{})
-	if err != nil {
+	if _, err := r.context.RookClientset.CephV1().CephClusters(namespace).Update(
+		r.opManagerContext,
+		cephCluster,
+		metav1.UpdateOptions{},
+	); err != nil {
 		panic(fmt.Sprintf("failed to update CephCluster CR: %v", err))
 	}
 	logger.Debug("CephCluster updated successfully.")
@@ -417,14 +413,10 @@ func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, 
 }
 
 func isOSDPod(labels map[string]string) bool {
-	if labels["app"] == "rook-ceph-osd" && labels["ceph-osd-id"] != "" {
-		return true
-	}
-
-	return false
+	return labels["app"] == "rook-ceph-osd" && labels["ceph-osd-id"] != ""
 }
 
-func isPodDead(oldPod *corev1.Pod, newPod *corev1.Pod) bool {
+func isPodDead(oldPod, newPod *corev1.Pod) bool {
 	namespacedName := fmt.Sprintf("%s/%s", newPod.Namespace, newPod.Name)
 	for _, cs := range newPod.Status.ContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
