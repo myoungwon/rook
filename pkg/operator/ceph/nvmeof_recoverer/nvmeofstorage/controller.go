@@ -112,7 +112,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	// Create a new controller
 	c, err := controller.New(controllerName, mgr, controller.Options{Reconciler: r})
 	if err != nil {
-		return errors.Wrapf(err, "failed to create %s controller", controllerName)
+		return fmt.Errorf("failed to create %s controller: %w", controllerName, err)
 	}
 	logger.Info("successfully started")
 
@@ -306,13 +306,13 @@ func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.
 		panic(fmt.Sprintf("failed to delete OSD deployment %q in namespace %q: %v",
 			osd.AppName+"-"+deviceInfo.OsdID, namespace, err))
 	}
+	logger.Debugf("successfully deleted the OSD deployment. Name: %q", osd.AppName+"-"+deviceInfo.OsdID)
 
 	// Disconnect the device used by this OSD
 	_, err = r.clustermanager.DisconnectOSDDevice(namespace, deviceInfo)
 	if err != nil {
 		panic(fmt.Sprintf("failed to disconnect OSD device with SubNQN %s: %v", deviceInfo.SubNQN, err))
 	}
-	logger.Debugf("successfully deleted the OSD deployment. Name: %q", osd.AppName+"-"+deviceInfo.OsdID)
 }
 
 func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
@@ -354,7 +354,7 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, devi
 	}
 	err = r.client.Update(r.opManagerContext, r.nvmeOfStorage)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to update NVMeOfStorage: %s, error: %+v", r.nvmeOfStorage.Name, err))
+		panic(fmt.Sprintf("failed to update NVMeOfStorage: %s, error: %+v", r.nvmeOfStorage.Name, err))
 	}
 
 	logger.Debugf("successfully reassigned the device for OSD.%s. host: [%s --> %s], device: [%s --> %s], SubNQN: %s",
@@ -366,7 +366,7 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, devi
 func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, oldDeviceInfo, newDeviceInfo cephv1.FabricDevice) error {
 	cephCluster, err := r.context.RookClientset.CephV1().CephClusters(request.Namespace).Get(context.Background(), newDeviceInfo.ClusterName, metav1.GetOptions{})
 	if err != nil {
-		logger.Errorf("failed to get cluster CR. err: %v", err)
+		logger.Errorf("failed to get CephCluster CR. err: %v", err)
 		return err
 	}
 
@@ -406,8 +406,7 @@ func (r *ReconcileNvmeOfStorage) updateCephClusterCR(request reconcile.Request, 
 	if err != nil {
 		panic(fmt.Sprintf("failed to update CephCluster CR: %v", err))
 	}
-	logger.Debugf("CephCluster updated successfully. oldNode: %s, oldDevicePath: %s, newNode: %s, newDevicePath: %s",
-		oldDeviceInfo.AttachedNode, oldDeviceInfo.DeviceName, newDeviceInfo.AttachedNode, newDeviceInfo.DeviceName)
+	logger.Debug("CephCluster updated successfully.")
 
 	return nil
 }
