@@ -200,10 +200,10 @@ func (r *ReconcileNvmeOfStorage) tryRelocateDevice(request reconcile.Request) er
 	// Cleanup the OSD that is in CrashLoopBackOff
 	r.cleanupOSD(request.Namespace, deviceInfo)
 
-	// Connect the device to the new attachable host
+	// Connect the device to the new attachable node
 	newDeviceInfo := r.reassignFaultedOSDDevice(request.Namespace, deviceInfo)
 
-	// Request the OSD to be transferred to the next host
+	// Request the OSD to be transferred to the next node
 	err := r.updateCephClusterCR(request, deviceInfo, newDeviceInfo)
 	if err != nil {
 		logger.Errorf("unable to update CephCluster CR, err: %v", err)
@@ -318,22 +318,22 @@ func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.
 
 func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, deviceInfo cephv1.FabricDevice) cephv1.FabricDevice {
 	// Get the new host for the OSD reassignment
-	nextHostName, err := r.clustermanager.GetNextAttachableHost(deviceInfo.OsdID)
+	targetNode, err := r.clustermanager.GetNextAttachableNode(deviceInfo.OsdID)
 	if err != nil {
 		panic(fmt.Sprintf("Wrong Info"))
 	}
-	if nextHostName == "" {
-		// Return an empty struct when there is no attachable host, which means this OSD will be removed and rebalanced by Ceph
+	if targetNode == "" {
+		// Return an empty struct when there is no attachable node, which means this OSD will be removed and rebalanced by Ceph
 		return cephv1.FabricDevice{}
 	}
 
 	// Reassign the device to the new host
-	output, err := r.clustermanager.ConnectOSDDeviceToHost(namespace, nextHostName, deviceInfo)
+	output, err := r.clustermanager.ConnectOSDDeviceToNode(namespace, targetNode, deviceInfo)
 	if err != nil {
 		// TODO (cheolho.kang): If connectOSDDeviceToNode fails due to an abnormal targetNode,
 		// implement logic to exclude the current targetNode and search for the next attachable node.
-		panic(fmt.Sprintf("failed to connect device with SubNQN %s to host %s: %v",
-			deviceInfo.SubNQN, nextHostName, err))
+		panic(fmt.Sprintf("failed to connect device with SubNQN %s to node %s: %v",
+			deviceInfo.SubNQN, targetNode, err))
 	}
 
 	// Update the attached node for reassigning the device
@@ -361,7 +361,7 @@ func (r *ReconcileNvmeOfStorage) reassignFaultedOSDDevice(namespace string, devi
 		panic(fmt.Sprintf("failed to update NVMeOfStorage: %s, error: %+v", r.nvmeOfStorage.Name, err))
 	}
 
-	logger.Debugf("successfully reassigned the device for OSD.%s. host: [%s --> %s], device: [%s --> %s], SubNQN: %s",
+	logger.Debugf("successfully reassigned the device for OSD.%s. node: [%s --> %s], device: [%s --> %s], SubNQN: %s",
 		output.OsdID, deviceInfo.AttachedNode, output.AttachedNode, deviceInfo.DeviceName, output.DeviceName, output.SubNQN)
 
 	return output
