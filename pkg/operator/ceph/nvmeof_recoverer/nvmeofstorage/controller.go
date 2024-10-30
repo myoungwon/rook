@@ -58,7 +58,7 @@ const (
 type ControllerState int
 
 const (
-	INITIALIZATION = iota
+	INITIALIZATION ControllerState = iota
 	ACTIVATED
 )
 
@@ -67,19 +67,16 @@ const (
 	OSD_STATE_CHANGED
 )
 
-var state = INITIALIZATION
-
-var logger = capnslog.NewPackageLogger("github.com/rook/rook", controllerName)
-
-var nvmeOfStorageKind = reflect.TypeOf(cephv1.NvmeOfStorage{}).Name()
-
-// Sets the type meta for the controller main object
-var controllerTypeMeta = metav1.TypeMeta{
-	Kind:       nvmeOfStorageKind,
-	APIVersion: fmt.Sprintf("%s/%s", cephv1.CustomResourceGroup, cephv1.Version),
-}
-
-var _ reconcile.Reconciler = &ReconcileNvmeOfStorage{}
+var (
+	state              = INITIALIZATION
+	logger             = capnslog.NewPackageLogger("github.com/rook/rook", controllerName)
+	nvmeOfStorageKind  = reflect.TypeOf(cephv1.NvmeOfStorage{}).Name()
+	controllerTypeMeta = metav1.TypeMeta{
+		Kind:       nvmeOfStorageKind,
+		APIVersion: fmt.Sprintf("%s/%s", cephv1.CustomResourceGroup, cephv1.Version),
+	}
+	_ reconcile.Reconciler = &ReconcileNvmeOfStorage{}
+)
 
 // ReconcileNvmeOfStorage reconciles a NvmeOfStorage object
 type ReconcileNvmeOfStorage struct {
