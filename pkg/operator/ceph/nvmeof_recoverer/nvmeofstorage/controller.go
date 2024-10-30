@@ -435,23 +435,3 @@ func isPodDead(oldPod *corev1.Pod, newPod *corev1.Pod) bool {
 
 	return false
 }
-
-func getDeviceName(pods *corev1.PodList) string {
-	deviceName := ""
-	for _, envVar := range pods.Items[0].Spec.Containers[0].Env {
-		if envVar.Name == "ROOK_BLOCK_PATH" {
-			deviceName = envVar.Value
-			break
-		}
-	}
-	return deviceName
-}
-
-func getAttachedDeviceInfo(deviceList []cephv1.FabricDevice, attachedNode, deviceName string) cephv1.FabricDevice {
-	for _, device := range deviceList {
-		if device.AttachedNode == attachedNode && device.DeviceName == deviceName {
-			return device
-		}
-	}
-	panic("device not found")
-}
