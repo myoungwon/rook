@@ -230,7 +230,6 @@ func (r *ReconcileNvmeOfStorage) reconstructCRUSHMap(context context.Context, na
 	for i := range r.nvmeOfStorage.Spec.Devices {
 		device := &r.nvmeOfStorage.Spec.Devices[i]
 		// Get OSD pods with label "app=rook-ceph-osd"
-		var clusterName string
 		opts := metav1.ListOptions{
 			LabelSelector: "app=" + osd.AppName,
 		}
@@ -240,12 +239,11 @@ func (r *ReconcileNvmeOfStorage) reconstructCRUSHMap(context context.Context, na
 			for _, envVar := range pod.Spec.Containers[0].Env {
 				if pod.Spec.NodeName == device.AttachedNode && envVar.Name == "ROOK_BLOCK_PATH" && envVar.Value == device.DeviceName {
 					device.OsdID = pod.Labels["ceph-osd-id"]
-					clusterName = pod.Labels["app.kubernetes.io/part-of"]
 					crushRoot := pod.Labels["topology-location-root"]
 
 					// Update CRUSH map for OSD relocation to fabric failure domain
 					fabricHost := FabricFailureDomainPrefix + "-" + r.nvmeOfStorage.Spec.Name
-					clusterInfo := cephclient.AdminClusterInfo(context, namespace, clusterName)
+					clusterInfo := cephclient.AdminClusterInfo(context, namespace, r.nvmeOfStorage.Spec.ClusterName)
 					cmd := []string{"osd", "crush", "move", fmt.Sprintf("osd.%s", device.OsdID), fmt.Sprintf("root=%s", crushRoot), fmt.Sprintf("host=%s", fabricHost)}
 					exec := cephclient.NewCephCommand(r.context, clusterInfo, cmd)
 					exec.JsonOutput = true
@@ -265,7 +263,6 @@ func (r *ReconcileNvmeOfStorage) reconstructCRUSHMap(context context.Context, na
 						Port:         strconv.Itoa(device.Port),
 						SubNQN:       device.SubNQN,
 						AttachedNode: device.AttachedNode,
-						ClusterName:  clusterName,
 					})
 				}
 			}
@@ -361,7 +358,7 @@ func (r *ReconcileNvmeOfStorage) updateCephClusterCR(namespace string, oldDevice
 	// Fetch the CephCluster CR
 	cephCluster, err := r.context.RookClientset.CephV1().CephClusters(namespace).Get(
 		r.opManagerContext,
-		newDeviceInfo.ClusterName,
+		r.nvmeOfStorage.Spec.ClusterName,
 		metav1.GetOptions{},
 	)
 	if err != nil {

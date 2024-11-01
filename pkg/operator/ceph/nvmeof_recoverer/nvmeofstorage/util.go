@@ -81,7 +81,6 @@ type FabricDescriptor struct {
 	SubNQN       string
 	AttachedNode string
 	DeviceName   string
-	ClusterName  string
 }
 
 // FabricMap manages the mapping between devices and nodes
