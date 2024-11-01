@@ -46,12 +46,12 @@ def get_nvme_devices():
 
 def connect_nvme(subnqn, ip_address, port):
     devices_before = get_nvme_devices()
-    subprocess.run(['nvme', 'connect', '-t', 'tcp', '-n', subnqn, '-a', ip_address, '-s', port], check=True)
+    subprocess.run(['nvme', 'connect', '-t', 'tcp', '-n', subnqn, '-a', ip_address, '-s', port], stdout=subprocess.DEVNULL, check=True)
     time.sleep(1)
     devices_after = get_nvme_devices()
     new_devices = devices_after - devices_before
-    if new_devices:
-        print('SUCCESS:', '\\n'.join(new_devices))
+    if len(new_devices) == 1:
+        print('SUCCESS:', list(new_devices)[0])
     else:
         print('FAILED: No new devices connected.')
 
