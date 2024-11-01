@@ -302,7 +302,7 @@ func (r *ReconcileNvmeOfStorage) cleanupOSD(namespace string, deviceInfo cephv1.
 	logger.Debugf("successfully deleted the OSD deployment. Name: %q", podName)
 
 	// Disconnect the device used by this OSD
-	if _, err := r.disconnectOSDDevice(namespace, deviceInfo); err != nil {
+	if err := r.disconnectOSDDevice(namespace, deviceInfo); err != nil {
 		panic(fmt.Sprintf("failed to disconnect OSD device with SubNQN %s: %v", deviceInfo.SubNQN, err))
 	}
 }
@@ -434,15 +434,15 @@ func (r *ReconcileNvmeOfStorage) connectOSDDeviceToNode(namespace, targetNode st
 }
 
 // disconnectOSDDevice runs a job to disconnect an NVMe-oF device from the target node
-func (r *ReconcileNvmeOfStorage) disconnectOSDDevice(namespace string, fabricDeviceInfo cephv1.FabricDevice) (string, error) {
+func (r *ReconcileNvmeOfStorage) disconnectOSDDevice(namespace string, fabricDeviceInfo cephv1.FabricDevice) error {
 	jobCode := fmt.Sprintf(nvmeofToolCode, "disconnect", "", "", fabricDeviceInfo.SubNQN)
 	jobOutput, err := RunJob(r.opManagerContext, r.context.Clientset, namespace, fabricDeviceInfo.AttachedNode, jobCode)
 	if err != nil || !strings.Contains(jobOutput, "SUCCESS:") {
-		return jobOutput, fmt.Errorf("failed to disconnect NVMe-oF device. fd: %v, output: %s", fabricDeviceInfo, jobOutput)
+		return fmt.Errorf("failed to disconnect NVMe-oF device. fd: %v, output: %s", fabricDeviceInfo, jobOutput)
 	}
 
 	logger.Debugf("successfully disconnected NVMe-oF Device. Node: %s, SubNQN: %s, Output: %s", fabricDeviceInfo.AttachedNode, fabricDeviceInfo.SubNQN, jobOutput)
-	return jobOutput, nil
+	return nil
 }
 
 func isOSDPod(labels map[string]string) bool {
