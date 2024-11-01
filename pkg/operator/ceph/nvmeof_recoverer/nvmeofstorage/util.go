@@ -20,10 +20,8 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strconv"
 	"time"
 
-	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -98,32 +96,20 @@ func NewFabricMap() *FabricMap {
 	}
 }
 
-// AddOSD adds an OSD to the fabric map
-func (o *FabricMap) AddOSD(osdID string, nvmeofstorage *cephv1.NvmeOfStorage) {
-	for _, device := range nvmeofstorage.Spec.Devices {
-		if device.OsdID == osdID {
-			fd := FabricDescriptor{
-				ID:           osdID,
-				Address:      nvmeofstorage.Spec.IP,
-				Port:         strconv.Itoa(device.Port),
-				SubNQN:       device.SubNQN,
-				AttachedNode: device.AttachedNode,
-			}
-			o.descriptorsByNode[fd.AttachedNode] = append(o.descriptorsByNode[fd.AttachedNode], fd)
-			logger.Debugf("added device %s to node %s", fd.SubNQN, fd.AttachedNode)
-			break
-		}
-	}
+// AddDescriptor adds a fabric descriptor to the fabric map
+func (o *FabricMap) AddDescriptor(fd FabricDescriptor) {
+	o.descriptorsByNode[fd.AttachedNode] = append(o.descriptorsByNode[fd.AttachedNode], fd)
+	logger.Debugf("added device %s to node %s", fd.SubNQN, fd.AttachedNode)
 }
 
-// RemoveOSD removes a fabric descriptor from the map
-func (o *FabricMap) RemoveOSD(osdID, node string) {
-	fds := o.descriptorsByNode[node]
+// RemoveDescriptor removes a fabric descriptor from the map
+func (o *FabricMap) RemoveDescriptor(device FabricDescriptor) {
+	fds := o.descriptorsByNode[device.AttachedNode]
 	for i, fd := range fds {
-		if fd.ID == osdID {
-			o.descriptorsByNode[node] = append(fds[:i], fds[i+1:]...)
-			if len(o.descriptorsByNode[node]) == 0 {
-				delete(o.descriptorsByNode, node)
+		if fd.SubNQN == device.SubNQN {
+			o.descriptorsByNode[device.AttachedNode] = append(fds[:i], fds[i+1:]...)
+			if len(o.descriptorsByNode[device.AttachedNode]) == 0 {
+				delete(o.descriptorsByNode, device.AttachedNode)
 			}
 			logger.Debugf("removed device %s from node %s", fd.SubNQN, fd.AttachedNode)
 			break
@@ -144,12 +130,17 @@ func (o *FabricMap) FindDescriptorBySubNQN(subNQN string) (FabricDescriptor, err
 	return FabricDescriptor{}, fmt.Errorf("device with subnqn %s not found", subNQN)
 }
 
+// GetDescriptorsByNode returns a copy of the devicesByNode map
+func (o *FabricMap) GetDescriptorsByNode(targetNode string) []FabricDescriptor {
+	return o.descriptorsByNode[targetNode]
+}
+
 // GetNextAttachableNode returns the node with the least number of OSDs attached to it
-func (o *FabricMap) GetNextAttachableNode(deviceInfo cephv1.FabricDevice) string {
+func (o *FabricMap) GetNextAttachableNode(fd FabricDescriptor) string {
 	nextNode := ""
 
 	// Find the faulty node that has the device attached
-	faultyNode := deviceInfo.AttachedNode
+	faultyNode := fd.AttachedNode
 
 	// Find nodes that can be used to reattach the device
 	attachableNodes := make([]string, 0, len(o.descriptorsByNode))
@@ -168,7 +159,7 @@ func (o *FabricMap) GetNextAttachableNode(deviceInfo cephv1.FabricDevice) string
 	}
 
 	// Remove the fault node from the map
-	o.RemoveOSD(deviceInfo.OsdID, faultyNode)
+	o.RemoveDescriptor(fd)
 
 	return nextNode
 }
