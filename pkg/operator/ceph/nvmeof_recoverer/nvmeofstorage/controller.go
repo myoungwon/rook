@@ -238,27 +238,27 @@ func (r *ReconcileNvmeOfStorage) reconstructCRUSHMap(context context.Context, na
 		for _, pod := range pods.Items {
 			for _, envVar := range pod.Spec.Containers[0].Env {
 				if pod.Spec.NodeName == device.AttachedNode && envVar.Name == "ROOK_BLOCK_PATH" && envVar.Value == device.DeviceName {
-					device.OsdID = pod.Labels["ceph-osd-id"]
+					osdID := pod.Labels["ceph-osd-id"]
 					crushRoot := pod.Labels["topology-location-root"]
 
 					// Update CRUSH map for OSD relocation to fabric failure domain
 					fabricHost := FabricFailureDomainPrefix + "-" + r.nvmeOfStorage.Spec.Name
 					clusterInfo := cephclient.AdminClusterInfo(context, namespace, r.nvmeOfStorage.Spec.ClusterName)
-					cmd := []string{"osd", "crush", "move", fmt.Sprintf("osd.%s", device.OsdID), fmt.Sprintf("root=%s", crushRoot), fmt.Sprintf("host=%s", fabricHost)}
+					cmd := []string{"osd", "crush", "move", fmt.Sprintf("osd.%s", osdID), fmt.Sprintf("root=%s", crushRoot), fmt.Sprintf("host=%s", fabricHost)}
 					exec := cephclient.NewCephCommand(r.context, clusterInfo, cmd)
 					exec.JsonOutput = true
 					buf, err := exec.Run()
 					if err != nil {
-						logger.Error(err, "Failed to move osd", "osdID", device.OsdID, "srcHost", device.AttachedNode,
+						logger.Error(err, "Failed to move osd", "osdID", osdID, "srcHost", device.AttachedNode,
 							"destHost", fabricHost, "result", string(buf))
 						panic(err)
 					}
 					logger.Debugf("Successfully updated CRUSH Map. osdID: %s, srcHost: %s, destHost: %s",
-						device.OsdID, device.AttachedNode, fabricHost)
+						osdID, device.AttachedNode, fabricHost)
 
 					// Update the OSD deployment depending on the nvmeofstorage CR
 					r.fabricMap.AddDescriptor(FabricDescriptor{
-						ID:           device.OsdID,
+						ID:           osdID,
 						Address:      r.nvmeOfStorage.Spec.IP,
 						Port:         strconv.Itoa(device.Port),
 						SubNQN:       device.SubNQN,

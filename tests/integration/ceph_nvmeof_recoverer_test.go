@@ -92,21 +92,18 @@ func (s *NvmeofRecovererSuite) TestBasicSingleFabricDomain() {
 				Port:         1152,
 				AttachedNode: node1,
 				DeviceName:   "/dev/nvme0n1",
-				ClusterName:  s.namespace,
 			},
 			{
 				SubNQN:       "nqn.2024-07.com.example:storage2",
 				Port:         1152,
 				AttachedNode: node2,
 				DeviceName:   "/dev/nvme1n1",
-				ClusterName:  s.namespace,
 			},
 			{
 				SubNQN:       "nqn.2024-07.com.example:storage3",
 				Port:         1152,
 				AttachedNode: node1,
 				DeviceName:   "/dev/nvme2n1",
-				ClusterName:  s.namespace,
 			},
 		},
 	}
