@@ -76,8 +76,7 @@ spec:
     - subnqn: "` + device.SubNQN + `"
       port: ` + fmt.Sprintf("%d", device.Port) + `
       attachedNode: "` + device.AttachedNode + `"
-      deviceName: "` + device.DeviceName + `"
-      clusterName: "` + device.ClusterName + `"`
+      deviceName: "` + device.DeviceName + `"`
 		}
 	}
 	err := n.k8sh.ResourceOperation("apply", nvmeofstorageResource)
