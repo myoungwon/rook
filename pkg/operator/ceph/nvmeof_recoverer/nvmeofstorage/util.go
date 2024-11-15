@@ -129,6 +129,11 @@ func (o *FabricMap) FindDescriptorBySubNQN(subNQN string) (FabricDescriptor, err
 	return FabricDescriptor{}, fmt.Errorf("device with subnqn %s not found", subNQN)
 }
 
+// GetDescriptors returns a copy of the devicesByNode map
+func (o *FabricMap) GetDescriptors() map[string][]FabricDescriptor {
+	return o.descriptorsByNode
+}
+
 // GetDescriptorsByNode returns a copy of the devicesByNode map
 func (o *FabricMap) GetDescriptorsByNode(targetNode string) []FabricDescriptor {
 	return o.descriptorsByNode[targetNode]
