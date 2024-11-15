@@ -89,9 +89,14 @@ type FabricMap struct {
 }
 
 // NewFabricMap creates a new instance of FabricMap
-func NewFabricMap() *FabricMap {
+func NewFabricMap(attachableNodes []string) *FabricMap {
+	descriptorsByNode := make(map[string][]FabricDescriptor)
+	for _, node := range attachableNodes {
+		descriptorsByNode[node] = []FabricDescriptor{}
+	}
+
 	return &FabricMap{
-		descriptorsByNode: make(map[string][]FabricDescriptor),
+		descriptorsByNode: descriptorsByNode,
 	}
 }
 

@@ -86,6 +86,10 @@ func (s *NvmeofRecovererSuite) TestBasicSingleFabricDomain() {
 	s.nvmeStorage = cephv1.NvmeOfStorageSpec{
 		Name: "nvmeofstorage-pbssd1",
 		IP:   "192.168.100.11",
+		AttachableNodes: []string{
+			node1,
+			node2,
+		},
 		Devices: []cephv1.FabricDevice{
 			{
 				SubNQN:       "nqn.2024-07.com.example:storage1",

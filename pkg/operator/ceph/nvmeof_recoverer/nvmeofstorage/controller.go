@@ -101,7 +101,6 @@ func newReconciler(mgr manager.Manager, context *clusterd.Context, opManagerCont
 		scheme:           mgr.GetScheme(),
 		opManagerContext: opManagerContext,
 		recorder:         mgr.GetEventRecorderFor("rook-" + controllerName),
-		fabricMap:        NewFabricMap(),
 		nvmeOfStorage:    &cephv1.NvmeOfStorage{},
 	}
 }
@@ -178,6 +177,9 @@ func (r *ReconcileNvmeOfStorage) initFabricMap(context context.Context, request 
 		logger.Errorf("unable to fetch NvmeOfStorage, err: %v", err)
 		return err
 	}
+
+	// Initialize the fabric map
+	r.fabricMap = NewFabricMap(r.nvmeOfStorage.Spec.AttachableNodes)
 
 	r.reconstructCRUSHMap(context, request.Namespace)
 

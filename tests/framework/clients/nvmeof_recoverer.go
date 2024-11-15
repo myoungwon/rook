@@ -68,6 +68,14 @@ metadata:
 spec:
   name: ` + resource.Name + `
   ip: ` + resource.IP
+	if len(resource.AttachableNodes) > 0 {
+		nvmeofstorageResource += `
+  attachableNodes:`
+		for _, node := range resource.AttachableNodes {
+			nvmeofstorageResource += `
+    - "` + node + `"`
+		}
+	}
 	if len(resource.Devices) > 0 {
 		nvmeofstorageResource += `
   devices:`
