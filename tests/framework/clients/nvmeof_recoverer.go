@@ -82,9 +82,7 @@ spec:
 		for _, device := range resource.Devices {
 			nvmeofstorageResource += `
     - subnqn: "` + device.SubNQN + `"
-      port: ` + fmt.Sprintf("%d", device.Port) + `
-      attachedNode: "` + device.AttachedNode + `"
-      deviceName: "` + device.DeviceName + `"`
+      port: ` + fmt.Sprintf("%d", device.Port)
 		}
 	}
 	err := n.k8sh.ResourceOperation("apply", nvmeofstorageResource)

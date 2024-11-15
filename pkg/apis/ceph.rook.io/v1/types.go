@@ -3261,10 +3261,8 @@ type NvmeOfStorageStatus struct {
 
 // FabricDevice represents a fabric device connected to a node
 type FabricDevice struct {
-	SubNQN       string `json:"subnqn"`
-	Port         int    `json:"port"`
-	AttachedNode string `json:"attachedNode"`
-	DeviceName   string `json:"deviceName"`
+	SubNQN string `json:"subnqn"`
+	Port   int    `json:"port"`
 }
 
 // NvmeOfStorageList contains a list of NvmeOfOSD

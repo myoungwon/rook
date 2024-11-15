@@ -70,12 +70,6 @@ func (s *NvmeofRecovererSuite) TearDownSuite() {
 }
 
 func (s *NvmeofRecovererSuite) baseSetup() {
-	nodeDeviceMappings := make(map[string][]string)
-	for _, device := range s.nvmeStorage.Devices {
-		nodeDeviceMappings[device.AttachedNode] = append(nodeDeviceMappings[device.AttachedNode], device.DeviceName)
-	}
-	s.settings.NodeDeviceMappings = nodeDeviceMappings
-
 	s.installer, s.k8sh = StartTestCluster(s.T, s.settings)
 	s.helper = clients.CreateTestClient(s.k8sh, s.installer.Manifests)
 }
@@ -92,22 +86,16 @@ func (s *NvmeofRecovererSuite) TestBasicSingleFabricDomain() {
 		},
 		Devices: []cephv1.FabricDevice{
 			{
-				SubNQN:       "nqn.2024-07.com.example:storage1",
-				Port:         1152,
-				AttachedNode: node1,
-				DeviceName:   "/dev/nvme0n1",
+				SubNQN: "nqn.2024-07.com.example:storage1",
+				Port:   1152,
 			},
 			{
-				SubNQN:       "nqn.2024-07.com.example:storage2",
-				Port:         1152,
-				AttachedNode: node2,
-				DeviceName:   "/dev/nvme1n1",
+				SubNQN: "nqn.2024-07.com.example:storage2",
+				Port:   1152,
 			},
 			{
-				SubNQN:       "nqn.2024-07.com.example:storage3",
-				Port:         1152,
-				AttachedNode: node1,
-				DeviceName:   "/dev/nvme2n1",
+				SubNQN: "nqn.2024-07.com.example:storage3",
+				Port:   1152,
 			},
 		},
 	}
