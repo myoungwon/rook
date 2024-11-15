@@ -13155,6 +13155,10 @@ spec:
               type: object
             spec:
               properties:
+                attachableNodes:
+                  items:
+                    type: string
+                  type: array
                 clusterName:
                   type: string
                 devices:
@@ -13181,6 +13185,7 @@ spec:
                 name:
                   type: string
               required:
+                - attachableNodes
                 - clusterName
                 - devices
                 - ip
